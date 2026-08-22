@@ -1,0 +1,85 @@
+[project]
+name = "pawe"
+version = "0.1.0"
+description = "Auditable A-share weekly research system"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.12,<3.13"
+classifiers = [
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3.12",
+]
+keywords = ["a-share", "ai", "research", "audit", "backtesting"]
+dependencies = [
+  "akshare>=1.18.40,<2",
+  "alembic>=1.14,<2",
+  "argon2-cffi>=25.1,<26",
+  "apscheduler>=3.11,<4",
+  "asyncpg>=0.30,<1",
+  "cryptography>=44,<51",
+  "duckdb>=1.3,<2",
+  "fastapi>=0.115,<1",
+  "httpx>=0.28,<1",
+  "openai>=1.60,<3",
+  "pdfplumber>=0.11,<1",
+  "pyarrow>=18,<24",
+  "pydantic>=2.10,<3",
+  "pydantic-settings>=2.7,<3",
+  "sqlalchemy[asyncio]>=2.0,<3",
+  "uvicorn[standard]>=0.34,<1",
+  "xlrd>=2.0,<3",
+]
+
+[project.urls]
+Homepage = "https://github.com/an1987na/PAWE"
+Repository = "https://github.com/an1987na/PAWE"
+Issues = "https://github.com/an1987na/PAWE/issues"
+
+[dependency-groups]
+dev = [
+  "httpx2>=2,<3",
+  "mypy>=1.14,<2",
+  "pytest>=8.3,<10",
+  "pytest-asyncio>=0.25,<2",
+  "ruff>=0.9,<1",
+]
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["apps/api/pawe_api", "services/worker/pawe_worker"]
+
+[tool.pytest.ini_options]
+pythonpath = [".", "apps/api", "services/worker"]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = "apscheduler.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "xlrd.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "akshare.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "pyarrow.*"
+ignore_missing_imports = true

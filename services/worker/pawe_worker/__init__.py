@@ -1,0 +1,1 @@
+"""PAWE scheduled worker package."""

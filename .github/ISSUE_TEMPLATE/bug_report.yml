@@ -1,0 +1,35 @@
+name: 缺陷报告
+description: 报告可复现的功能、数据或验证问题
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: 请勿提交密钥、密码、令牌、个人自选、账户数据或未经授权的第三方资料。安全漏洞请使用 Security 私密报告入口。
+  - type: textarea
+    id: summary
+    attributes:
+      label: 问题概述
+      description: 说明预期行为与实际行为。
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 最小复现步骤
+      description: 提供不含敏感数据的最小步骤、日期边界和必要配置。
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: 影响范围
+      description: 是否影响规则、数据时点、发布、权限、幂等或未来数据隔离？
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: 已执行检查
+      description: 列出测试、日志摘要和已排除因素；不要粘贴内部堆栈或凭据。

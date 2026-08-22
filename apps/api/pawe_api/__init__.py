@@ -1,0 +1,1 @@
+"""PAWE API package."""
