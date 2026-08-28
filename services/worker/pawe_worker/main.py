@@ -293,6 +293,17 @@ async def execute_next_queued_weekly_selection_with_preparation(
             await execute_weekly_data_preparation(now=local_now, week_id=week_id)
         except Exception as exc:
             print(f"weekly_selection preparation failed: {type(exc).__name__}: {exc}")
+            async with SessionFactory() as session:
+                return await SqlJobApplication(session).finish_output_job(
+                    uuid.UUID(str(job_id)),
+                    succeeded=False,
+                    stage="data_preparation",
+                    message="周初数据准备失败，任务未进入规则计算。",
+                    error_code="DATA_PREPARATION_FAILED",
+                    error_message=(
+                        f"Weekly data preparation failed safely: {type(exc).__name__}"
+                    ),
+                )
     return await execute_queued_weekly_selection(
         uuid.UUID(str(job_id)),
         SessionFactory,
@@ -1310,7 +1321,10 @@ async def _benchmark_return(start: date, end: date) -> float:
 def build_scheduler(settings: Settings) -> BlockingScheduler:
     scheduler = BlockingScheduler(
         timezone=ZoneInfo("Asia/Shanghai"),
-        executors={"default": ThreadPoolExecutor(max_workers=1)},
+        # Data preparation can legitimately take several minutes. Keep separate
+        # capacity for the durable queue poller and the close-of-day jobs so one
+        # long snapshot build cannot starve every scheduled task.
+        executors={"default": ThreadPoolExecutor(max_workers=3)},
     )
     scheduler.add_job(
         run_queued_weekly_selection,

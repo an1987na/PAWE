@@ -31,6 +31,13 @@ def test_worker_registers_preopen_and_daily_brief_jobs() -> None:
     assert "minute='30'" in str(jobs["daily-brief"].trigger)
 
 
+def test_worker_reserves_capacity_for_long_data_preparation() -> None:
+    scheduler = build_scheduler(Settings(_env_file=None))
+
+    executor = scheduler._executors["default"]
+    assert executor._pool._max_workers == 3
+
+
 def test_worker_uses_natural_monday_for_holiday_shifted_week() -> None:
     assert natural_week_id(date(2026, 8, 10)) == date(2026, 8, 10)
     assert natural_week_id(date(2026, 8, 11)) == date(2026, 8, 10)

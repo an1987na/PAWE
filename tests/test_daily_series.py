@@ -177,3 +177,36 @@ def test_partial_backup_supplies_history_while_close_quote_supplies_today_amount
         Decimal("12000000"),
     ]
     assert "amount_fallback:eastmoney" in result.warnings
+
+
+def test_wider_sina_backup_can_replace_a_stale_primary_as_degraded() -> None:
+    primary = replace(_series("tencent"), bars=(replace(_bar("tencent"), amount=None),))
+    sina = replace(
+        _series("sina", "10.20"),
+        bars=(
+            _bar("sina", "10.20"),
+            replace(_bar("sina", "10.30"), trade_date=date(2026, 8, 3)),
+        ),
+    )
+
+    result = reconcile_daily_series_with_amount_fallback(primary, sina)
+
+    assert result.quality is DataQuality.DEGRADED
+    assert [bar.trade_date for bar in result.bars] == [date(2026, 7, 31), date(2026, 8, 3)]
+    assert all(bar.amount == Decimal("10000000") for bar in result.bars)
+    assert "primary_daily_coverage_incomplete" in result.warnings
+    assert "amount_bearing_backup_series_used:sina" in result.warnings
+
+
+def test_wider_backup_rejects_a_real_volume_conflict() -> None:
+    primary = replace(_series("tencent"), bars=(replace(_bar("tencent"), amount=None),))
+    conflicting = replace(_bar("sina", "10.20"), volume=Decimal("900000"))
+    sina = replace(
+        _series("sina", "10.20"),
+        bars=(conflicting, replace(conflicting, trade_date=date(2026, 8, 3))),
+    )
+
+    result = reconcile_daily_series_with_amount_fallback(primary, sina)
+
+    assert result.quality is DataQuality.CONFLICTED
+    assert result.bars == ()

@@ -187,6 +187,34 @@ def reconcile_daily_series_with_amount_fallback(
         return strict
     primary_by_date = {bar.trade_date: bar for bar in primary.bars}
     backup_by_date = {bar.trade_date: bar for bar in backup.bars}
+    if primary_by_date.keys() < backup_by_date.keys():
+        overlap = sorted(primary_by_date.keys() & backup_by_date.keys())
+        if not overlap or backup.is_delayed:
+            return strict
+        pairs = [
+            (primary_by_date[trade_date], backup_by_date[trade_date])
+            for trade_date in overlap
+        ]
+        if any(
+            primary_bar.adjustment != backup_bar.adjustment
+            or _relative_difference(primary_bar.volume, backup_bar.volume) > volume_tolerance
+            or backup_bar.amount is None
+            for primary_bar, backup_bar in pairs
+        ) or any(bar.amount is None for bar in backup_by_date.values()):
+            return strict
+        if strict.quality is DataQuality.CONFLICTED and backup.source != "sina":
+            return strict
+        return ReconciledDailySeries(
+            stock_key=backup.stock_key,
+            quality=DataQuality.DEGRADED,
+            bars=_with_quality(backup.bars, DataQuality.DEGRADED),
+            sources=(primary.source, backup.source),
+            warnings=strict.warnings
+            + (
+                "primary_daily_coverage_incomplete",
+                f"amount_bearing_backup_series_used:{backup.source}",
+            ),
+        )
     if not backup_by_date.keys() <= primary_by_date.keys():
         return strict
     if primary.is_delayed or backup.is_delayed:
