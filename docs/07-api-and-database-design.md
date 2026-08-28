@@ -146,7 +146,7 @@ erDiagram
 | `legacy_migration_batches` | 旧资料只读清单批次与清单哈希，不保存运行时依赖路径 |
 | `legacy_documents_staging` | 旧文档来源哈希、解析质量、关联来源和验证状态 |
 | `legacy_items_staging` | 旧主池/备选解析值、独立行情复算状态、证据型冲突归因、回放资格与实验臂；不得被正式决策链直接引用 |
-| `daily_brief_items` | `daily_brief_id`, `decision_item_id`, 日涨跌、周内进度、目标距离、量能、回撤、风险、证据和AI摘要 |
+| `daily_brief_items` | `daily_brief_id`, `decision_item_id`, 日涨跌、量能、证据和AI摘要；既有周度字段仅作历史兼容与周终内部计算，不进入日报展示 |
 | `evidence` | `id`, `kind`, `source`, `published_at`, `fetched_at`, `quality`, `payload_ref` |
 | `rule_proposals` | `schema_version`, `base_rule_version`, `scope`, `dsl`, `hypothesis`, `objective`, `required_features`, `invalidation_conditions`, `rollback_version`, `status`, `created_by`; DSL 不保存可执行代码 |
 | `experiments` | 提案、目标、基线、变更、生命周期状态、正式版本隔离标记与回退版本 |

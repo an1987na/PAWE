@@ -27,7 +27,10 @@ describe("manual output dates", () => {
 
   it("summarizes replay items for each displayed stage", () => {
     expect(replayStageItemSummary("weekly_selection", { rank: 1, stock_name: "甲公司", stock_code: "600001", role: "core", target_return: 0.1, confidence: "low" })).toContain("甲公司（600001）");
-    expect(replayStageItemSummary("daily_brief", { stock_name: "甲公司", stock_code: "600001", daily_return: 0.02, week_to_date_return: 0.05, risk_status: "watch" })).toContain("日涨 2.0%");
+    const dailySummary = replayStageItemSummary("daily_brief", { stock_name: "甲公司", stock_code: "600001", daily_return: 0.02, week_to_date_return: 0.05, volume_activity: 1.2, risk_status: "watch" });
+    expect(dailySummary).toContain("当日 2.0%");
+    expect(dailySummary).toContain("1.20×近5日均量");
+    expect(dailySummary).not.toContain("周内");
     expect(replayStageItemSummary("weekly_review", { stock_name: "甲公司", stock_code: "600001", week_high_return: 0.12, week_close_return: 0.03, target_touched: true })).toContain("触达10%");
   });
 

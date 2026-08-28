@@ -176,13 +176,10 @@ PostgreSQL 是快照、正式特征清单和业务状态的唯一权威来源。
 | `decision_set_id` | 当周正式发布决策版本，决定简报覆盖范围 |
 | `as_of/fetched_at` | 数据截止与抓取时间 |
 | `daily_return` | 当日收盘相对前收盘涨跌幅 |
-| `week_to_date_return` | 当日收盘相对当周首个交易日开盘涨跌幅 |
-| `week_high_return` | 截至当日周内最高相对当周首个交易日开盘涨幅 |
-| `drawdown_from_week_high` | 当日收盘相对截至当日周内高点回撤 |
-| `distance_to_target` | 距固定 10% 核心目标的差值 |
 | `volume_activity` | 当日成交量相对前 5 日均量 |
-| `risk_status` | on_track/watch/risk_triggered/data_degraded |
 | `evidence_ids` | 截至当日新增或仍有效的证据引用 |
+
+日报的正式展示与摘要只陈述指定交易日的日内行情，不展示或推断周内进度、周内高点、目标距离或周度风险状态。数据库中已有的 `week_*`、`distance_to_target` 和 `risk_status` 字段暂作为历史兼容与周终计算的内部数据保留，不属于日报对外事实契约；后续数据库迁移可在确认历史兼容方案后移除。
 
 ## 7. 数据健康验收
 

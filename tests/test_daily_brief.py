@@ -24,6 +24,8 @@ def test_brief_marks_target_touch_as_on_track() -> None:
     assert item.risk_status is DailyRiskStatus.ON_TRACK
     assert item.distance_to_target == 0
     assert item.week_high_return == pytest.approx(0.11)
+    assert item.summary == "当日收盘较前收+1.89%；成交量为前5日均量的1.20倍。"
+    assert "周内" not in item.summary
 
 
 def test_brief_marks_large_pullback_as_risk() -> None:

@@ -1065,9 +1065,9 @@ function ArchivedDailyBriefs({ weekId, briefs, loading, error, expandedDay, onTo
                       <div className="mb-3 flex flex-wrap items-center justify-between gap-2"><h5 className="text-sm font-semibold">{brief.archive_source === "formal" ? "正式发布日报" : "历史时点回放日报"} · V{brief.decision_version}</h5><p className="text-[11px] text-slate-500">信息截至 {formatShanghaiTime(brief.as_of)} · {brief.archive_source === "formal" ? `生成于 ${formatShanghaiTime(brief.fetched_at)}` : `实际回放抓取 ${formatShanghaiTime(brief.fetched_at)}`}</p></div>
                       <div className="space-y-2">
                         {brief.items.map((item) => (
-                          <article key={item.stock_code} className="grid gap-3 rounded-xl border border-black/10 bg-white p-3 sm:grid-cols-[1fr_1.5fr] sm:items-center">
-                            <div><p className="font-semibold">{item.stock_name} <span className="font-mono text-[10px] text-slate-500">{item.stock_code}</span></p><p className="mt-1 text-xs leading-5 text-slate-600">{item.summary}</p></div>
-                            <div className="grid grid-cols-3 gap-2 sm:grid-cols-6"><BriefMetric label="当日" value={pct(item.daily_return)} /><BriefMetric label="周内" value={pct(item.week_to_date_return)} /><BriefMetric label="最高" value={pct(item.week_high_return)} /><BriefMetric label="高点回撤" value={pct(item.drawdown_from_week_high)} /><BriefMetric label="目标距离" value={pct(item.distance_to_target)} /><BriefMetric label="风险" value={riskStatusLabel[item.risk_status]} /></div>
+                          <article key={item.stock_code} className="grid gap-3 rounded-xl border border-black/10 bg-white p-3 sm:grid-cols-[1fr_1fr] sm:items-center">
+                            <div><p className="font-semibold">{item.stock_name} <span className="font-mono text-[10px] text-slate-500">{item.stock_code}</span></p><p className="mt-1 text-xs leading-5 text-slate-600">{technicalBriefSummary(item)}</p></div>
+                            <div className="grid grid-cols-2 gap-2"><BriefMetric label="当日涨跌" value={pct(item.daily_return)} /><BriefMetric label="相对近5日量能" value={item.volume_activity == null ? "暂无" : `${item.volume_activity.toFixed(2)}×`} /></div>
                           </article>
                         ))}
                       </div>
@@ -1124,7 +1124,7 @@ function Dashboard() {
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
   const [watchBriefs, setWatchBriefs] = useState<WatchlistDailyBrief[]>([]);
   const [watchReview, setWatchReview] = useState<WatchlistWeeklyReview | null>(null);
-  const [selectedBriefDate, setSelectedBriefDate] = useState<string | null>(null);
+  const [weeklyBriefsOpen, setWeeklyBriefsOpen] = useState(false);
   const [watchOutputOpen, setWatchOutputOpen] = useState<"daily" | "weekly" | null>(null);
   const [watchlistOpen, setWatchlistOpen] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -1171,8 +1171,6 @@ function Dashboard() {
   }
 
   const briefDates = Array.from(new Set(briefs.map((brief) => brief.trade_date))).sort().reverse();
-  const selectedBrief = briefs.find((brief) => brief.trade_date === selectedBriefDate) ?? null;
-
   return (
     <div className="grid gap-0 lg:grid-cols-[1.3fr_0.7fr]">
       <section className="px-6 py-4 md:px-10">
@@ -1190,7 +1188,7 @@ function Dashboard() {
           ))}
         </div>
         <section className="mt-3 border-t border-black/10 pt-3">
-          <div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-semibold tracking-[0.16em] text-emerald-800">DAILY BRIEF</p><h3 className="mt-1 text-lg font-semibold">每日简报</h3></div><div className="flex flex-wrap justify-end gap-2">{briefDates.length > 0 ? briefDates.map((tradeDate) => <button type="button" key={tradeDate} onClick={() => setSelectedBriefDate(tradeDate)} className="rounded-full border border-emerald-800/25 bg-emerald-50 px-3 py-2 font-mono text-sm font-semibold text-emerald-900 transition hover:border-emerald-700 hover:bg-emerald-100">{tradeDate}</button>) : <span className="text-sm text-slate-500">收盘后生成；不改变本周名单。</span>}</div></div>
+          <div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-semibold tracking-[0.16em] text-emerald-800">DAILY BRIEF</p><h3 className="mt-1 text-lg font-semibold">每日简报</h3></div>{briefDates.length > 0 ? <button type="button" onClick={() => setWeeklyBriefsOpen(true)} className="rounded-full border border-emerald-800/25 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-900 transition hover:border-emerald-700 hover:bg-emerald-100">查看每日简报 · 本周 {briefDates.length} 份</button> : <span className="text-sm text-slate-500">收盘后生成；仅介绍当日行情。</span>}</div>
         </section>
       </section>
       <aside className="dashboard-summary border-t border-black/10 p-6 text-white lg:border-l lg:border-t-0 md:px-8 md:py-4">
@@ -1200,7 +1198,7 @@ function Dashboard() {
         <WatchlistOutputButtons dark dailyCount={watchBriefs.length} weeklyReady={watchReview !== null} onDaily={() => setWatchOutputOpen("daily")} onWeekly={() => setWatchOutputOpen("weekly")} />
       </aside>
       {detail && <DashboardDetail detail={detail} week={week} onClose={() => setDetail(null)} />}
-      {selectedBriefDate && <DailyBriefDetail tradeDate={selectedBriefDate} brief={selectedBrief} onClose={() => setSelectedBriefDate(null)} />}
+      {weeklyBriefsOpen && <WeeklyTargetsDailyBriefsModal briefs={briefs} onClose={() => setWeeklyBriefsOpen(false)} />}
       {watchlistOpen && <WatchlistManager items={watchlist} onItemsChange={setWatchlist} onClose={() => setWatchlistOpen(false)} />}
       {watchOutputOpen === "daily" && <WatchlistDailyBriefsModal briefs={watchBriefs} onClose={() => setWatchOutputOpen(null)} />}
       {watchOutputOpen === "weekly" && <WatchlistWeeklyReviewModal review={watchReview} onClose={() => setWatchOutputOpen(null)} />}
@@ -1219,10 +1217,7 @@ function WatchlistOutputButtons({ dailyCount, weeklyReady, onDaily, onWeekly, da
 }
 
 function WatchlistDailyBriefsModal({ briefs, onClose }: { briefs: WatchlistDailyBrief[]; onClose: () => void }) {
-  const [selectedDate, setSelectedDate] = useState(briefs.map((brief) => brief.trade_date).sort().reverse()[0] ?? null);
-  const selected = briefs.find((brief) => brief.trade_date === selectedDate) ?? null;
-  useEffect(() => { const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); }; window.addEventListener("keydown", closeOnEscape); return () => window.removeEventListener("keydown", closeOnEscape); }, [onClose]);
-  return <div className="fixed inset-0 z-50 grid items-end bg-slate-950/45 backdrop-blur-sm sm:place-items-center sm:p-6" role="dialog" aria-modal="true" aria-label="我的自选每日简报"><button type="button" aria-label="关闭自选每日简报" onClick={onClose} className="absolute inset-0 cursor-default" /><section className="relative z-10 max-h-[92vh] w-full overflow-y-auto rounded-t-[28px] bg-[#fcfbf7] p-5 shadow-2xl sm:max-w-4xl sm:rounded-[28px] sm:p-7"><div className="flex items-start justify-between gap-4"><div><p className="text-xs font-semibold tracking-[0.18em] text-emerald-800">PERSONAL DAILY BRIEF</p><h2 className="mt-2 text-2xl font-semibold">我的自选 · 每日简报</h2><p className="mt-2 text-sm text-slate-500">与系统日报同批生成，仅本人可见，不影响公共名单与规则评分。</p></div><button type="button" onClick={onClose} className="rounded-full border border-black/10 px-3 py-2 text-sm">关闭</button></div>{briefs.length > 0 ? <><div className="mt-5 flex flex-wrap gap-2">{[...briefs].sort((left, right) => right.trade_date.localeCompare(left.trade_date)).map((brief) => <button type="button" key={brief.trade_date} onClick={() => setSelectedDate(brief.trade_date)} className={`rounded-full border px-3 py-2 font-mono text-sm font-semibold ${selectedDate === brief.trade_date ? "border-emerald-800 bg-emerald-800 text-white" : "border-emerald-800/25 bg-emerald-50 text-emerald-900"}`}>{brief.trade_date}</button>)}</div>{selected && <DailyBriefCards title={`${selected.trade_date} 收盘简报`} items={selected.items} note={`${selected.items.length} 只本人自选`} />}</> : <p className="mt-5 rounded-xl bg-[#f7f5ef] p-4 text-sm text-slate-500">本周尚无个人自选简报；交易日收盘后的定时任务会自动生成。</p>}<p className="mt-4 text-xs leading-5 text-slate-400">只统计标的实际生效后的关注期间；不回写加入自选之前的历史记录。本简报不构成交易指令。</p></section></div>;
+  return <DailyBriefsModal eyebrow="PERSONAL DAILY BRIEF" title="我的自选 · 每日简报" description="与每周标的日报同批生成，仅本人可见，不影响公共名单与规则评分。" briefs={briefs.map((brief) => ({ ...brief, meta: `${brief.items.length} 只本人自选` }))} emptyMessage="本周尚无个人自选简报；交易日收盘后的定时任务会自动生成。" footer="只统计标的实际生效后的关注期间；不回写加入自选之前的历史记录。" onClose={onClose} />;
 }
 
 function WatchlistWeeklyReviewModal({ review, onClose }: { review: WatchlistWeeklyReview | null; onClose: () => void }) {
@@ -1286,31 +1281,31 @@ function WatchlistManager({ items, onItemsChange, onClose }: { items: WatchlistI
   return <div className="fixed inset-0 z-50 grid items-end bg-slate-950/45 backdrop-blur-sm sm:place-items-center sm:p-6" role="dialog" aria-modal="true" aria-label="我的自选"><button type="button" aria-label="关闭自选管理" onClick={onClose} className="absolute inset-0 cursor-default" /><section className="relative z-10 max-h-[92vh] w-full overflow-y-auto rounded-t-[28px] bg-[#fcfbf7] p-5 shadow-2xl sm:max-w-2xl sm:rounded-[28px] sm:p-7"><div className="flex items-start justify-between gap-4"><div><p className="text-xs font-semibold tracking-[0.18em] text-emerald-800">PERSONAL WATCHLIST</p><h2 className="mt-2 text-2xl font-semibold">我的自选 · {items.length}/5</h2><p className="mt-2 text-sm leading-6 text-slate-500">每位用户独立管理；日报和周终复盘同步跟踪，但不参与规则评分或公共名单生成。</p></div><button type="button" onClick={onClose} className="rounded-full border border-black/10 px-3 py-2 text-sm">关闭</button></div><div className="mt-5 space-y-2">{items.length === 0 ? <p className="rounded-xl bg-[#f7f5ef] p-4 text-sm text-slate-500">暂无自选，可按代码或名称搜索 A 股。</p> : items.map((item) => <article key={item.id} className="flex items-center justify-between gap-4 rounded-xl border border-black/10 bg-white p-3"><div><p className="font-semibold">{item.stock_name} <span className="font-mono text-xs text-slate-500">{item.stock_code}</span></p><p className="mt-1 text-xs text-slate-500">从 {item.effective_from} 交易日起跟踪</p></div><button type="button" disabled={busyCode === item.stock_code} onClick={() => void remove(item.stock_code)} className="rounded-full border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-50 disabled:opacity-50">移除</button></article>)}</div><form onSubmit={search} className="mt-6 flex gap-2"><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="输入 600519 或贵州茅台" className="min-w-0 flex-1 rounded-xl border border-black/15 bg-white px-4 py-3 text-sm outline-none focus:border-emerald-700 focus:ring-2 focus:ring-emerald-700/15" /><button type="submit" disabled={loading} className="rounded-xl bg-[#173f35] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{loading ? "搜索中…" : "搜索"}</button></form>{error && <p role="alert" className="mt-3 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}<div className="mt-3 space-y-2">{results.map((row) => <article key={row.stock_code} className="flex items-center justify-between gap-4 rounded-xl bg-[#f7f5ef] p-3"><div><p className="font-semibold">{row.stock_name} <span className="font-mono text-xs text-slate-500">{row.stock_code}</span></p><p className="mt-1 text-xs text-slate-500">{row.exchange} · {row.board}</p></div><button type="button" disabled={row.already_followed || items.length >= 5 || busyCode === row.stock_code} onClick={() => void add(row.stock_code)} className="rounded-full bg-emerald-800 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-700 disabled:bg-slate-300">{row.already_followed ? "已关注" : items.length >= 5 ? "已满5只" : "加入自选"}</button></article>)}</div><p className="mt-5 text-xs leading-5 text-slate-400">开盘前加入的标的从当日起跟踪；其余时间加入的标的从下一交易日起跟踪。不回写已生成的历史产出。</p></section></div>;
 }
 
-function DailyBriefDetail({ tradeDate, brief, onClose }: { tradeDate: string; brief: DailyBrief | null; onClose: () => void }) {
-  useEffect(() => {
-    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [onClose]);
-  return (
-    <div className="fixed inset-0 z-50 grid items-end bg-slate-950/45 backdrop-blur-sm sm:place-items-center sm:p-6" role="dialog" aria-modal="true" aria-label={`${tradeDate} 每日简报`}>
-      <button type="button" aria-label="关闭每日简报" onClick={onClose} className="absolute inset-0 cursor-default" />
-      <section className="relative z-10 max-h-[92vh] w-full overflow-y-auto rounded-t-[28px] bg-[#fcfbf7] p-5 shadow-2xl sm:max-w-4xl sm:rounded-[28px] sm:p-7">
-        <div className="flex items-start justify-between gap-4"><div><p className="text-xs font-semibold tracking-[0.18em] text-emerald-800">DAILY BRIEF</p><h2 className="mt-2 text-2xl font-semibold">{tradeDate} 收盘简报</h2><p className="mt-2 text-xs text-slate-500">{brief ? `信息截至 ${formatShanghaiTime(brief.as_of)} · 数据质量 ${qualityLabel[brief.quality]} · 正式名单 V${brief.decision_version}` : "该日正式日报暂不可用"}</p></div><button type="button" onClick={onClose} className="rounded-full border border-black/10 px-3 py-2 text-sm">关闭</button></div>
-        {brief && <DailyBriefCards title="公共标的" items={brief.items} />}
-        <p className="mt-4 text-xs leading-5 text-slate-400">消息面只展示生成时点前已接入且可追溯的证据；暂无证据不等于不存在市场消息。本简报不构成交易指令。</p>
-      </section>
-    </div>
-  );
+type DailyBriefModalEntry = {
+  trade_date: string;
+  items: DailyBriefItem[];
+  meta: string;
+};
+
+function WeeklyTargetsDailyBriefsModal({ briefs, onClose }: { briefs: DailyBrief[]; onClose: () => void }) {
+  return <DailyBriefsModal eyebrow="WEEKLY TARGETS DAILY BRIEF" title="每周标的 · 每日简报" description="选择交易日查看当日收盘行情；日报不汇总或推断周内表现。" briefs={briefs.map((brief) => ({ ...brief, meta: `信息截至 ${formatShanghaiTime(brief.as_of)} · 数据质量 ${qualityLabel[brief.quality]} · 正式名单 V${brief.decision_version}` }))} emptyMessage="本周尚无每周标的简报；交易日收盘后的定时任务会自动生成。" onClose={onClose} />;
+}
+
+function DailyBriefsModal({ eyebrow, title, description, briefs, emptyMessage, footer, onClose }: { eyebrow: string; title: string; description: string; briefs: DailyBriefModalEntry[]; emptyMessage: string; footer?: string; onClose: () => void }) {
+  const orderedBriefs = [...briefs].sort((left, right) => right.trade_date.localeCompare(left.trade_date));
+  const [selectedDate, setSelectedDate] = useState(orderedBriefs[0]?.trade_date ?? null);
+  const selected = orderedBriefs.find((brief) => brief.trade_date === selectedDate) ?? null;
+  useEffect(() => { const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); }; window.addEventListener("keydown", closeOnEscape); return () => window.removeEventListener("keydown", closeOnEscape); }, [onClose]);
+  return <div className="fixed inset-0 z-50 grid items-end bg-slate-950/45 backdrop-blur-sm sm:place-items-center sm:p-6" role="dialog" aria-modal="true" aria-label={title}><button type="button" aria-label={`关闭${title}`} onClick={onClose} className="absolute inset-0 cursor-default" /><section className="relative z-10 max-h-[92vh] w-full overflow-y-auto rounded-t-[28px] bg-[#fcfbf7] p-5 shadow-2xl sm:max-w-4xl sm:rounded-[28px] sm:p-7"><div className="flex items-start justify-between gap-4"><div><p className="text-xs font-semibold tracking-[0.18em] text-emerald-800">{eyebrow}</p><h2 className="mt-2 text-2xl font-semibold">{title}</h2><p className="mt-2 text-sm text-slate-500">{description}</p></div><button type="button" onClick={onClose} className="rounded-full border border-black/10 px-3 py-2 text-sm">关闭</button></div>{orderedBriefs.length > 0 ? <><div className="mt-5 flex flex-wrap gap-2" aria-label="选择日报日期">{orderedBriefs.map((brief) => <button type="button" key={brief.trade_date} aria-pressed={selectedDate === brief.trade_date} onClick={() => setSelectedDate(brief.trade_date)} className={`rounded-full border px-3 py-2 font-mono text-sm font-semibold ${selectedDate === brief.trade_date ? "border-emerald-800 bg-emerald-800 text-white" : "border-emerald-800/25 bg-emerald-50 text-emerald-900"}`}>{brief.trade_date}</button>)}</div>{selected && <DailyBriefCards title={`${selected.trade_date} 收盘简报`} items={selected.items} note={selected.meta} />}</> : <p className="mt-5 rounded-xl bg-[#f7f5ef] p-4 text-sm text-slate-500">{emptyMessage}</p>}<p className="mt-4 text-xs leading-5 text-slate-400">{footer ? `${footer} ` : ""}仅介绍所选交易日的日内行情，不承担周行情汇总功能。消息面只展示生成时点前已接入且可追溯的证据。本简报不构成交易指令。</p></section></div>;
 }
 
 function DailyBriefCards({ title, items, note }: { title: string; items: DailyBriefItem[]; note?: string }) {
-  return <section className="mt-5"><div className="mb-3 flex flex-wrap items-end justify-between gap-2"><h3 className="font-semibold">{title}</h3>{note && <p className="text-xs text-slate-500">{note}</p>}</div><div className="space-y-3">{items.map((item) => <article key={item.stock_code} className="rounded-2xl border border-black/10 bg-white p-4"><div className="flex flex-wrap items-start justify-between gap-2"><div><p className="font-mono text-[10px] text-slate-500">{item.stock_code}</p><h4 className="mt-0.5 font-semibold">{item.stock_name}</h4></div><span className={`status status-${item.risk_status}`}>{riskStatusLabel[item.risk_status]}</span></div><div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-6"><StatCell label="当日" value={pct(item.daily_return)} /><StatCell label="周内" value={pct(item.week_to_date_return)} /><StatCell label="周内最高" value={pct(item.week_high_return)} /><StatCell label="高点回撤" value={pct(item.drawdown_from_week_high)} /><StatCell label="目标距离" value={pct(item.distance_to_target)} /><StatCell label="量能" value={item.volume_activity == null ? "暂无" : `${item.volume_activity.toFixed(2)}×`} /></div><div className="mt-3 grid gap-2 sm:grid-cols-2"><div className="rounded-xl bg-emerald-50 px-3 py-2.5"><p className="text-[10px] font-semibold text-emerald-900">技术面</p><p className="mt-1 text-xs leading-5 text-emerald-950/80">{technicalBriefSummary(item)}</p></div><div className="rounded-xl bg-slate-50 px-3 py-2.5"><p className="text-[10px] font-semibold text-slate-700">消息面</p><p className="mt-1 text-xs leading-5 text-slate-600">{newsBriefSummary(item)}</p></div></div></article>)}</div></section>;
+  return <section className="mt-5"><div className="mb-3 flex flex-wrap items-end justify-between gap-2"><h3 className="font-semibold">{title}</h3>{note && <p className="text-xs text-slate-500">{note}</p>}</div><div className="space-y-3">{items.map((item) => <article key={item.stock_code} className="rounded-2xl border border-black/10 bg-white p-4"><div><p className="font-mono text-[10px] text-slate-500">{item.stock_code}</p><h4 className="mt-0.5 font-semibold">{item.stock_name}</h4></div><div className="mt-3 grid grid-cols-2 gap-2"><StatCell label="当日涨跌" value={pct(item.daily_return)} /><StatCell label="相对近5日量能" value={item.volume_activity == null ? "暂无" : `${item.volume_activity.toFixed(2)}×`} /></div><div className="mt-3 grid gap-2 sm:grid-cols-2"><div className="rounded-xl bg-emerald-50 px-3 py-2.5"><p className="text-[10px] font-semibold text-emerald-900">日内行情</p><p className="mt-1 text-xs leading-5 text-emerald-950/80">{technicalBriefSummary(item)}</p></div><div className="rounded-xl bg-slate-50 px-3 py-2.5"><p className="text-[10px] font-semibold text-slate-700">当日消息</p><p className="mt-1 text-xs leading-5 text-slate-600">{newsBriefSummary(item)}</p></div></div></article>)}</div></section>;
 }
 
 function technicalBriefSummary(item: DailyBrief["items"][number]) {
   const volume = item.volume_activity == null ? "量能数据不足" : item.volume_activity >= 1 ? `量能为近5日均值的 ${item.volume_activity.toFixed(2)} 倍` : `量能为近5日均值的 ${item.volume_activity.toFixed(2)} 倍，低于均量`;
-  return `当日${pct(item.daily_return)}，周内${pct(item.week_to_date_return)}，距周内高点${pct(item.drawdown_from_week_high)}；${volume}。`;
+  return `当日收盘较前收${pct(item.daily_return)}；${volume}。`;
 }
 
 function newsBriefSummary(item: DailyBrief["items"][number]) {
@@ -1333,5 +1328,4 @@ function LoadingScreen() { return <main className="grid min-h-screen place-items
 function Stat({ label, value, onClick }: { label: string; value: string; onClick?: () => void }) { return <div className="border-b border-white/15 pb-2"><dt className="text-xs text-emerald-100/65">{label}</dt><dd className="mt-1 text-base font-semibold">{onClick ? <button type="button" onClick={onClick} className="text-left underline decoration-emerald-200/30 underline-offset-4 transition hover:decoration-emerald-100 focus:outline-none focus:ring-2 focus:ring-emerald-200">{value}</button> : value}</dd></div>; }
 function StatCell({ label, value }: { label: string; value: string }) { return <div className="rounded-xl bg-[#f7f5ef] px-3 py-3"><p className="text-xs text-slate-500">{label}</p><p className="mt-1 font-mono font-semibold">{value}</p></div>; }
 function BriefMetric({ label, value }: { label: string; value: string }) { return <div><p className="text-[10px] text-slate-500">{label}</p><p className="font-mono text-xs font-semibold">{value}</p></div>; }
-const riskStatusLabel = { on_track: "进展正常", watch: "继续观察", risk_triggered: "风险触发", data_degraded: "数据降级" } as const;
 const qualityLabel = { verified: "双源验证", single_source: "单源降级", degraded: "降级", conflicted: "冲突", missing: "缺失" } as const;

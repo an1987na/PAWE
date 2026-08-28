@@ -42,10 +42,12 @@ def build_deterministic_brief_item(
         invalidation_triggered=market.invalidation_triggered,
     )
 
-    summary = (
-        f"当日{daily_return:+.2%}，周内收盘{week_to_date_return:+.2%}，"
-        f"周内最高{week_high_return:+.2%}；状态：{risk_status.value}。"
+    volume_summary = (
+        "量能数据不足"
+        if volume_activity is None
+        else f"成交量为前5日均量的{volume_activity:.2f}倍"
     )
+    summary = f"当日收盘较前收{daily_return:+.2%}；{volume_summary}。"
     return DailyBriefItem(
         stock_code=target.stock_code,
         stock_name=target.stock_name,

@@ -95,7 +95,10 @@ export function replayStageItemSummary(
     return `${rank}${name}（${code}）· ${role} · 目标 ${percent("target_return")} · ${item.confidence ?? "低置信度"}`;
   }
   if (stage === "daily_brief") {
-    return `${name}（${code}）· 日涨 ${percent("daily_return")} · 周内 ${percent("week_to_date_return")} · ${item.risk_status ?? "数据降级"}`;
+    const volumeActivity = typeof item.volume_activity === "number"
+      ? `${item.volume_activity.toFixed(2)}×近5日均量`
+      : "量能暂无";
+    return `${name}（${code}）· 当日 ${percent("daily_return")} · ${volumeActivity}`;
   }
   return `${name}（${code}）· 周内最高 ${percent("week_high_return")} · 周终 ${percent("week_close_return")} · ${item.target_touched ? "触达10%" : "未触达"}`;
 }
