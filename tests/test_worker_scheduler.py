@@ -7,6 +7,7 @@ from pawe_api.config import Settings
 from pawe_worker.main import (
     add_startup_catchups,
     build_scheduler,
+    daily_brief_catchup_week,
     missing_daily_brief_targets,
     natural_week_id,
     upcoming_week_id,
@@ -29,6 +30,7 @@ def test_worker_registers_preopen_and_daily_brief_jobs() -> None:
     assert "minute='30'" in str(jobs["weekly-preopen"].trigger)
     assert "hour='15'" in str(jobs["daily-brief"].trigger)
     assert "minute='30'" in str(jobs["daily-brief"].trigger)
+    assert jobs["daily-brief"].misfire_grace_time == 6 * 60 * 60
 
 
 def test_worker_reserves_capacity_for_long_data_preparation() -> None:
@@ -36,6 +38,15 @@ def test_worker_reserves_capacity_for_long_data_preparation() -> None:
 
     executor = scheduler._executors["default"]
     assert executor._pool._max_workers == 3
+
+
+def test_weekly_review_snapshot_cutoff_follows_data_refresh() -> None:
+    timezone = ZoneInfo("Asia/Shanghai")
+    started_at = datetime(2026, 8, 28, 20, 28, tzinfo=timezone)
+    refreshed_at = datetime(2026, 8, 28, 20, 35, tzinfo=timezone)
+
+    assert worker._review_generated_at(started_at, observed_at=refreshed_at) == refreshed_at
+    assert worker._review_generated_at(started_at, observed_at=started_at) == started_at
 
 
 def test_worker_uses_natural_monday_for_holiday_shifted_week() -> None:
@@ -159,6 +170,23 @@ def test_daily_brief_catchup_skips_incomplete_calendar() -> None:
     )
 
     assert targets == ()
+
+
+def test_daily_brief_catchup_checks_just_finished_week_on_weekend() -> None:
+    assert daily_brief_catchup_week(date(2026, 8, 29)) == date(2026, 8, 24)
+    assert daily_brief_catchup_week(date(2026, 8, 30)) == date(2026, 8, 24)
+    assert (
+        daily_brief_catchup_week(
+            date(2026, 8, 31), next_open_after_previous=date(2026, 9, 1)
+        )
+        == date(2026, 8, 24)
+    )
+    assert (
+        daily_brief_catchup_week(
+            date(2026, 9, 1), next_open_after_previous=date(2026, 9, 1)
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio

@@ -601,7 +601,7 @@ function ApprovalCenter() {
         <div className="flex flex-wrap gap-2">
           <button disabled={submitting || hasActiveJob(jobs, "weekly_selection")} onClick={() => setTaskToConfirm("weekly_selection")} className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:opacity-50">周初名单</button>
           <button disabled={submitting || hasActiveJob(jobs, "daily_brief")} onClick={() => setTaskToConfirm("daily_brief")} className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:opacity-50">每日简报</button>
-          <button disabled={submitting || hasActiveJob(jobs, "weekly_review")} onClick={() => setTaskToConfirm("weekly_review")} className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:opacity-50">周终复盘 · {reviewWeekId}</button>
+          <button disabled={submitting || hasActiveJob(jobs, "weekly_review")} onClick={() => setTaskToConfirm("weekly_review")} className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:opacity-50">周终复盘</button>
         </div>
       </div>
       {error && <p role="alert" className="mt-3 rounded-xl bg-red-50 px-4 py-2.5 text-sm text-red-800">{error}</p>}
@@ -1121,10 +1121,12 @@ const reviewSourceLabel: Record<WeeklyReview["source_type"], string> = { rule: "
 function Dashboard() {
   const [week, setWeek] = useState<WeekSummary | null>(null);
   const [briefs, setBriefs] = useState<DailyBrief[]>([]);
+  const [reviews, setReviews] = useState<WeeklyReview[]>([]);
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
   const [watchBriefs, setWatchBriefs] = useState<WatchlistDailyBrief[]>([]);
   const [watchReview, setWatchReview] = useState<WatchlistWeeklyReview | null>(null);
-  const [weeklyBriefsOpen, setWeeklyBriefsOpen] = useState(false);
+  const [weeklyContent, setWeeklyContent] = useState<"selection" | "daily" | "review">("selection");
+  const [selectedReviewItem, setSelectedReviewItem] = useState<{ review: WeeklyReview; item: WeeklyReviewItem } | null>(null);
   const [watchOutputOpen, setWatchOutputOpen] = useState<"daily" | "weekly" | null>(null);
   const [watchlistOpen, setWatchlistOpen] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -1150,8 +1152,12 @@ function Dashboard() {
     const current = api("/api/v1/weeks/current")
       .then(async (publishedWeek: WeekSummary) => {
         setWeek(publishedWeek);
-        const weeklyBriefs = await api(`/api/v1/weeks/${publishedWeek.week_id}/briefs`) as DailyBrief[];
+        const [weeklyBriefs, weeklyReviews] = await Promise.all([
+          api(`/api/v1/weeks/${publishedWeek.week_id}/briefs`) as Promise<DailyBrief[]>,
+          api(`/api/v1/weeks/${publishedWeek.week_id}/reviews`) as Promise<WeeklyReview[]>,
+        ]);
         setBriefs(weeklyBriefs);
+        setReviews(weeklyReviews);
       })
       .catch((reason) => {
         if (reason instanceof ApiError && reason.status === 404) setWeek(null);
@@ -1171,14 +1177,19 @@ function Dashboard() {
   }
 
   const briefDates = Array.from(new Set(briefs.map((brief) => brief.trade_date))).sort().reverse();
+  const primaryReview = selectPrimaryReviewVersion(reviews)[0] ?? null;
   return (
     <div className="grid gap-0 lg:grid-cols-[1.3fr_0.7fr]">
       <section className="px-6 py-4 md:px-10">
-        <div className="mb-4 flex flex-col items-start gap-2 sm:flex-row sm:items-end sm:justify-between">
-          <div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Published selection</p><h2 className="mt-2 text-2xl font-semibold">本周观察名单</h2></div>
-          <p className="whitespace-nowrap text-sm text-slate-500">{week.week_id} · V{week.decision_version}</p>
+        <div className="mb-4 flex flex-col gap-3 border-b border-black/10 pb-3 sm:flex-row sm:items-end sm:justify-between">
+          <div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Published weekly research</p><p className="mt-2 whitespace-nowrap text-sm text-slate-500">{week.week_id} · V{week.decision_version}</p></div>
+          <div role="tablist" aria-label="本周研究内容" className="flex w-full gap-1 rounded-xl bg-black/[0.045] p-1 sm:w-auto">
+            <DashboardContentTab active={weeklyContent === "selection"} onClick={() => setWeeklyContent("selection")}>本周观察名单</DashboardContentTab>
+            <DashboardContentTab active={weeklyContent === "daily"} onClick={() => setWeeklyContent("daily")}>{`每日简报${briefDates.length > 0 ? ` · ${briefDates.length}` : ""}`}</DashboardContentTab>
+            <DashboardContentTab active={weeklyContent === "review"} onClick={() => setWeeklyContent("review")}>本周复盘</DashboardContentTab>
+          </div>
         </div>
-        <div className="space-y-1.5">
+        {weeklyContent === "selection" && <div className="space-y-1.5">
           {week.items.map((item) => (
             <button type="button" onClick={() => setDetail({ type: "stock", item })} key={item.stock_code} className="grid w-full gap-3 rounded-xl border border-black/10 bg-white px-4 py-2 text-left transition hover:border-emerald-700/40 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-emerald-700 md:grid-cols-[0.7fr_0.4fr_1.9fr] md:items-center">
               <div><p className="font-mono text-xs text-slate-500">#{item.rank} · {item.stock_code}</p><h3 className="mt-1 text-base font-semibold">{item.stock_name}</h3></div>
@@ -1186,10 +1197,9 @@ function Dashboard() {
               <div><p className="text-sm leading-5 text-slate-700">{item.summary}</p><p className="text-xs leading-5 text-amber-800">风险：{item.primary_risk}</p></div>
             </button>
           ))}
-        </div>
-        <section className="mt-3 border-t border-black/10 pt-3">
-          <div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-semibold tracking-[0.16em] text-emerald-800">DAILY BRIEF</p><h3 className="mt-1 text-lg font-semibold">每日简报</h3></div>{briefDates.length > 0 ? <button type="button" onClick={() => setWeeklyBriefsOpen(true)} className="rounded-full border border-emerald-800/25 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-900 transition hover:border-emerald-700 hover:bg-emerald-100">查看每日简报 · 本周 {briefDates.length} 份</button> : <span className="text-sm text-slate-500">收盘后生成；仅介绍当日行情。</span>}</div>
-        </section>
+        </div>}
+        {weeklyContent === "daily" && <DashboardDailyBriefPanel briefs={briefs} />}
+        {weeklyContent === "review" && <DashboardWeeklyReviewPanel review={primaryReview} onSelectItem={(item) => primaryReview && setSelectedReviewItem({ review: primaryReview, item })} />}
       </section>
       <aside className="dashboard-summary border-t border-black/10 p-6 text-white lg:border-l lg:border-t-0 md:px-8 md:py-4">
         <div className="flex items-end justify-between gap-3"><div><p className="text-xs font-semibold tracking-[0.18em] text-[#c2ef4e]">WEEKLY SNAPSHOT</p><h2 className="mt-2 text-2xl font-semibold">{week.shortage ? `实际发布 ${week.items.length} 只` : "本周正式 5 只"}</h2></div><p className="max-w-44 text-right text-xs leading-5 text-white/65">{week.shortage ? week.shortage_reason : "名单已审批冻结；日报不改变名单。"}</p></div>
@@ -1198,12 +1208,37 @@ function Dashboard() {
         <WatchlistOutputButtons dark dailyCount={watchBriefs.length} weeklyReady={watchReview !== null} onDaily={() => setWatchOutputOpen("daily")} onWeekly={() => setWatchOutputOpen("weekly")} />
       </aside>
       {detail && <DashboardDetail detail={detail} week={week} onClose={() => setDetail(null)} />}
-      {weeklyBriefsOpen && <WeeklyTargetsDailyBriefsModal briefs={briefs} onClose={() => setWeeklyBriefsOpen(false)} />}
+      {selectedReviewItem && <HistoryItemDetail {...selectedReviewItem} onClose={() => setSelectedReviewItem(null)} />}
       {watchlistOpen && <WatchlistManager items={watchlist} onItemsChange={setWatchlist} onClose={() => setWatchlistOpen(false)} />}
       {watchOutputOpen === "daily" && <WatchlistDailyBriefsModal briefs={watchBriefs} onClose={() => setWatchOutputOpen(null)} />}
       {watchOutputOpen === "weekly" && <WatchlistWeeklyReviewModal review={watchReview} onClose={() => setWatchOutputOpen(null)} />}
     </div>
   );
+}
+
+function DashboardContentTab({ active, onClick, children }: { active: boolean; onClick: () => void; children: string }) {
+  return <button type="button" role="tab" aria-selected={active} onClick={onClick} className={`min-w-0 flex-1 whitespace-nowrap rounded-lg px-3 py-2 text-xs font-semibold transition sm:flex-none sm:text-sm ${active ? "bg-[#173f35] text-white shadow-sm" : "text-slate-600 hover:bg-white/70 hover:text-slate-900"}`}>{children}</button>;
+}
+
+function DashboardDailyBriefPanel({ briefs }: { briefs: DailyBrief[] }) {
+  const ordered = [...briefs].sort((left, right) => right.trade_date.localeCompare(left.trade_date));
+  const [selectedDate, setSelectedDate] = useState(ordered[0]?.trade_date ?? null);
+  const selected = ordered.find((brief) => brief.trade_date === selectedDate) ?? null;
+  if (!selected) return <DashboardInlineEmpty title="本周尚无每日简报" detail="交易日收盘后的定时任务会自动生成；日报仅介绍对应交易日的日内行情。" />;
+  return <section role="tabpanel"><div className="flex flex-wrap items-center justify-between gap-2"><div className="grid w-full grid-cols-5 gap-1.5 sm:flex sm:w-auto sm:flex-wrap" aria-label="选择日报日期">{ordered.map((brief) => <button type="button" key={brief.trade_date} aria-label={brief.trade_date} aria-pressed={selectedDate === brief.trade_date} onClick={() => setSelectedDate(brief.trade_date)} className={`rounded-full border px-1.5 py-1.5 font-mono text-[11px] font-semibold transition sm:px-2.5 ${selectedDate === brief.trade_date ? "border-emerald-800 bg-emerald-800 text-white" : "border-emerald-800/20 bg-emerald-50 text-emerald-900 hover:border-emerald-700"}`}>{brief.trade_date.slice(5).replace("-", "/")}</button>)}</div><p className="text-[11px] text-slate-500">{selected.trade_date} · {formatShanghaiTime(selected.as_of)} · {qualityLabel[selected.quality]} · V{selected.decision_version}</p></div><DashboardDailyBriefRows items={selected.items} /><p className="mt-2 text-[11px] leading-4 text-slate-400">仅陈述当日涨跌、相对量能和已验证消息；不汇总周行情，不构成交易指令。</p></section>;
+}
+
+function DashboardDailyBriefRows({ items }: { items: DailyBriefItem[] }) {
+  return <div className="mt-2 overflow-hidden rounded-xl border border-black/10 bg-white"><div className="hidden grid-cols-[minmax(8rem,1fr)_5rem_6rem_minmax(8rem,1.4fr)] gap-3 bg-[#f7f5ef] px-3 py-1.5 text-[10px] font-semibold text-slate-500 sm:grid"><span>标的</span><span>当日涨跌</span><span>相对量能</span><span>消息状态</span></div><div className="divide-y divide-black/5">{items.map((item) => { const evidenceCount = item.evidence_ids?.length ?? 0; return <article key={item.stock_code} className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-3 gap-y-1 px-3 py-2 sm:grid-cols-[minmax(8rem,1fr)_5rem_6rem_minmax(8rem,1.4fr)]"><div className="min-w-0"><p className="truncate text-sm font-semibold">{item.stock_name}</p><p className="font-mono text-[10px] text-slate-400">{item.stock_code}</p></div><p className={`font-mono text-sm font-semibold ${item.daily_return >= 0 ? "text-emerald-700" : "text-red-700"}`}>{pct(item.daily_return)}</p><p className="font-mono text-xs font-semibold text-slate-700">{item.volume_activity == null ? "暂无" : `${item.volume_activity.toFixed(2)}×`}</p><p className={`col-span-3 truncate text-[11px] sm:col-span-1 ${evidenceCount > 0 ? "text-emerald-800" : "text-slate-400"}`}>{evidenceCount > 0 ? `${evidenceCount} 条已验证消息` : "暂无已验证消息"}</p></article>; })}</div></div>;
+}
+
+function DashboardWeeklyReviewPanel({ review, onSelectItem }: { review: WeeklyReview | null; onSelectItem: (item: WeeklyReviewItem) => void }) {
+  if (!review) return <DashboardInlineEmpty title="本周复盘尚未生成" detail="最后一个交易日的每日简报全部完成后，系统会自动生成本周复盘。" />;
+  return <section role="tabpanel"><div className="rounded-2xl bg-[#173f35] p-4 text-white"><div className="flex flex-wrap items-center justify-between gap-2"><p className="text-xs font-semibold tracking-[0.16em] text-emerald-100/70">{reviewSourceLabel[review.source_type]} · V{review.source_version}</p><span className="text-xs text-white/60">入口 {review.entry_trade_date} · 周终 {review.final_trade_date}</span></div><p className="mt-2 text-sm leading-6 text-emerald-50">{review.summary}</p></div><div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4"><StatCell label="触达 10%" value={`${Number(review.aggregate.target_touched_count ?? 0)}/${Number(review.aggregate.item_count ?? review.items.length)}`} /><StatCell label="平均周内最高" value={pct(Number(review.aggregate.average_week_high_return ?? 0))} /><StatCell label="平均周终收盘" value={pct(Number(review.aggregate.average_week_close_return ?? 0))} /><StatCell label="相对沪深300" value={review.aggregate.average_benchmark_excess == null ? "暂无" : pct(Number(review.aggregate.average_benchmark_excess))} /></div><div className="mt-3 grid gap-2 sm:grid-cols-2">{review.items.map((item) => <button type="button" key={item.stock_code} onClick={() => onSelectItem(item)} className="rounded-xl border border-black/10 bg-white p-4 text-left transition hover:border-emerald-700/40 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-emerald-700"><div className="flex items-start justify-between gap-3"><div><p className="font-mono text-[11px] text-slate-500">#{item.rank} · {item.stock_code}</p><h3 className="mt-1 font-semibold">{item.stock_name}</h3></div><span className={`rounded-full px-2 py-1 text-[11px] font-semibold ${item.target_touched ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-600"}`}>{item.target_touched ? "触达10%" : "未触达"}</span></div><div className="mt-3 grid grid-cols-3 gap-2"><BriefMetric label="周内最高" value={pct(item.week_high_return)} /><BriefMetric label="周终" value={pct(item.week_close_return)} /><BriefMetric label="回撤" value={pct(item.max_drawdown_from_entry)} /></div></button>)}</div>{review.status === "degraded" && <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">本次复盘为降级结果；未取得的基准或交叉验证数据已保留在审计警告中。</p>}</section>;
+}
+
+function DashboardInlineEmpty({ title, detail }: { title: string; detail: string }) {
+  return <div role="tabpanel" className="rounded-2xl border border-dashed border-black/15 bg-white p-8 text-center"><h3 className="text-lg font-semibold">{title}</h3><p className="mt-2 text-sm leading-6 text-slate-500">{detail}</p></div>;
 }
 
 type DashboardDetailState = { type: "stock"; item: WeeklyDecisionItem } | { type: "market" } | { type: "confidence" } | { type: "version" };
@@ -1286,10 +1321,6 @@ type DailyBriefModalEntry = {
   items: DailyBriefItem[];
   meta: string;
 };
-
-function WeeklyTargetsDailyBriefsModal({ briefs, onClose }: { briefs: DailyBrief[]; onClose: () => void }) {
-  return <DailyBriefsModal eyebrow="WEEKLY TARGETS DAILY BRIEF" title="每周标的 · 每日简报" description="选择交易日查看当日收盘行情；日报不汇总或推断周内表现。" briefs={briefs.map((brief) => ({ ...brief, meta: `信息截至 ${formatShanghaiTime(brief.as_of)} · 数据质量 ${qualityLabel[brief.quality]} · 正式名单 V${brief.decision_version}` }))} emptyMessage="本周尚无每周标的简报；交易日收盘后的定时任务会自动生成。" onClose={onClose} />;
-}
 
 function DailyBriefsModal({ eyebrow, title, description, briefs, emptyMessage, footer, onClose }: { eyebrow: string; title: string; description: string; briefs: DailyBriefModalEntry[]; emptyMessage: string; footer?: string; onClose: () => void }) {
   const orderedBriefs = [...briefs].sort((left, right) => right.trade_date.localeCompare(left.trade_date));

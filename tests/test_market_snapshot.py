@@ -88,6 +88,38 @@ def test_uses_tencent_prices_and_sina_amount_under_explicit_degradation() -> Non
     assert "amount_fallback:sina" in verification["warnings"]
 
 
+def test_technical_observation_ignores_conflict_outside_61_day_feature_window() -> None:
+    stock = models.Stock(
+        id=3,
+        code="600519",
+        exchange="SSE",
+        board="main",
+        name="贵州茅台",
+        listing_date=date(2001, 8, 27),
+        status="active",
+    )
+    primary = _series("tencent", amount=False)
+    old_bar = replace(
+        primary.bars[0],
+        trade_date=primary.bars[0].trade_date - timedelta(days=1),
+        open=primary.bars[0].open * 2,
+        high=primary.bars[0].high * 2,
+        low=primary.bars[0].low * 2,
+        close=primary.bars[0].close * 2,
+    )
+    primary = replace(primary, bars=(old_bar,) + primary.bars)
+
+    result = build_technical_observation(
+        stock,
+        primary,
+        _series("eastmoney", amount=True),
+        as_of=date(2026, 6, 30),
+    )
+
+    assert result.quality is DataQuality.VERIFIED
+    assert result.features.as_of == date(2026, 6, 30)
+
+
 def test_complete_backup_precedes_preferred_but_partial_source() -> None:
     eastmoney = _series("eastmoney", amount=True)
     eastmoney = replace(eastmoney, bars=eastmoney.bars[-11:])
@@ -96,3 +128,22 @@ def test_complete_backup_precedes_preferred_but_partial_source() -> None:
     ordered = _prefer_complete_backup([eastmoney, sina])
 
     assert [series.source for series in ordered] == ["sina", "eastmoney"]
+
+
+def test_current_eastmoney_backup_precedes_wider_but_stale_sina_source() -> None:
+    eastmoney = _series("eastmoney", amount=True)
+    sina = _series("sina", amount=True)
+    older_sina_bars = tuple(
+        replace(
+            sina.bars[0],
+            trade_date=sina.bars[0].trade_date - timedelta(days=offset),
+        )
+        for offset in range(5, 0, -1)
+    )
+    sina = replace(sina, bars=older_sina_bars + sina.bars[:-1])
+
+    ordered = _prefer_complete_backup([eastmoney, sina])
+
+    assert len(sina.bars) > len(eastmoney.bars)
+    assert eastmoney.bars[-1].trade_date > sina.bars[-1].trade_date
+    assert [series.source for series in ordered] == ["eastmoney"]

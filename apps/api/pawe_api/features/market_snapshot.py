@@ -1,4 +1,4 @@
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -179,6 +179,22 @@ def build_technical_observation(
     *,
     as_of: date,
 ) -> TechnicalSnapshotObservation:
+    # V9 technical features use exactly the latest 61 completed sessions. Keep
+    # source verification on that same information window so older, unused qfq
+    # factors or missing amounts cannot invalidate an otherwise complete input.
+    primary = _tail_series(primary, 61)
+    if primary is None:
+        backup = _tail_series(backup, 61)
+    elif backup is not None:
+        feature_dates = {bar.trade_date for bar in primary.bars}
+        aligned_backup_bars = tuple(
+            bar for bar in backup.bars if bar.trade_date in feature_dates
+        )
+        backup = (
+            replace(backup, bars=aligned_backup_bars)
+            if aligned_backup_bars
+            else None
+        )
     reconciled = reconcile_daily_series_with_amount_fallback(primary, backup)
     if reconciled.quality in {DataQuality.CONFLICTED, DataQuality.MISSING}:
         raise FeatureCalculationError("daily sources are not usable for a snapshot")
@@ -228,6 +244,14 @@ def build_technical_observation(
         features=features,
         payload=payload,
     )
+
+
+def _tail_series(
+    series: ProviderDailySeries | None, count: int
+) -> ProviderDailySeries | None:
+    if series is None or len(series.bars) <= count:
+        return series
+    return replace(series, bars=series.bars[-count:])
 
 
 async def _load_visible_series(
@@ -301,12 +325,25 @@ def _required_amount(value: Decimal | None) -> Decimal:
 def _prefer_complete_backup(
     candidates: list[ProviderDailySeries],
 ) -> list[ProviderDailySeries]:
-    """Prefer wider coverage, using Eastmoney only as the equal-coverage tie-breaker."""
-    return sorted(
+    """Prefer the freshest coverage, then width, with Eastmoney as the tie-breaker.
+
+    A stale series can be slightly wider because it was fetched from an earlier
+    window.  Letting that width win would discard a current backup and can
+    introduce obsolete qfq-factor conflicts into an otherwise valid snapshot.
+    """
+    ordered = sorted(
         candidates,
-        key=lambda series: (len(series.bars), series.source == "eastmoney"),
+        key=lambda series: (
+            series.bars[-1].trade_date if series.bars else date.min,
+            len(series.bars),
+            series.source == "eastmoney",
+        ),
         reverse=True,
     )
+    if not ordered or len(ordered[0].bars) < 61:
+        return ordered
+    latest_date = ordered[0].bars[-1].trade_date
+    return [series for series in ordered if series.bars[-1].trade_date == latest_date]
 
 
 def _technical_payload(features: TechnicalFeatures) -> dict[str, object]:

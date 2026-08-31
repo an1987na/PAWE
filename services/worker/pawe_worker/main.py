@@ -484,9 +484,38 @@ def missing_daily_brief_targets(
     return tuple(targets)
 
 
+def daily_brief_catchup_week(
+    today: date, *, next_open_after_previous: date | None = None
+) -> date | None:
+    """Return the formal week whose missing briefs startup catch-up may repair."""
+    current_week = natural_week_id(today)
+    if today.weekday() >= 5:
+        return current_week
+    previous_week = current_week - timedelta(days=7)
+    if next_open_after_previous is None or today >= next_open_after_previous:
+        return None
+    return previous_week
+
+
 async def _missing_daily_brief_targets(*, today: date) -> tuple[tuple[date, date], ...]:
-    target_week = natural_week_id(today) - timedelta(days=7)
     async with SessionFactory() as session:
+        next_open_after_previous = None
+        if today.weekday() < 5:
+            previous_week = natural_week_id(today) - timedelta(days=7)
+            next_open_after_previous = await session.scalar(
+                select(models.TradingCalendar.trade_date)
+                .where(
+                    models.TradingCalendar.trade_date > previous_week + timedelta(days=6),
+                    models.TradingCalendar.is_open.is_(True),
+                )
+                .order_by(models.TradingCalendar.trade_date)
+                .limit(1)
+            )
+        target_week = daily_brief_catchup_week(
+            today, next_open_after_previous=next_open_after_previous
+        )
+        if target_week is None:
+            return ()
         decision_rows = list(
             (
                 await session.execute(
@@ -755,10 +784,14 @@ async def execute_weekly_review(
         )
     except (DailyProviderError, RuntimeError):
         benchmark_return = None
+    # Newly fetched rows carry their real acquisition timestamps. The review
+    # cutoff must therefore be captured after refresh; reusing the task start
+    # time would make the snapshot filter discard data fetched by this task.
+    review_generated_at = _review_generated_at(local_now)
     reviews = await generate_formal_weekly_reviews(
         SessionFactory,
         target_week,
-        generated_at=local_now,
+        generated_at=review_generated_at,
         benchmark_return=benchmark_return,
     )
     async with SessionFactory() as session:
@@ -806,8 +839,17 @@ async def execute_weekly_review(
                 provider_retry_count=0,
             )
         async with SessionFactory() as session:
-            await generate_watchlist_weekly_items(session, target_week, generated_at=local_now)
+            await generate_watchlist_weekly_items(
+                session, target_week, generated_at=review_generated_at
+            )
     return reviews
+
+
+def _review_generated_at(
+    started_at: datetime, *, observed_at: datetime | None = None
+) -> datetime:
+    completed_at = (observed_at or datetime.now(SHANGHAI)).astimezone(SHANGHAI)
+    return max(started_at, completed_at)
 
 
 async def _missing_weekly_market_codes(
@@ -1367,6 +1409,10 @@ def build_scheduler(settings: Settings) -> BlockingScheduler:
         replace_existing=True,
         max_instances=1,
         coalesce=True,
+        # Local PAWE commonly runs on a laptop. Let the close task execute on a
+        # same-evening maintenance wake instead of discarding it after the
+        # scheduler's one-second default grace period.
+        misfire_grace_time=6 * 60 * 60,
     )
     return scheduler
 
