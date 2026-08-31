@@ -1,5 +1,6 @@
 import { type FormEvent, type KeyboardEvent as ReactKeyboardEvent, useEffect, useState } from "react";
 import type { Confidence, DailyBrief, DailyBriefItem, ErrorAttribution, MarketState, ReplayRun, ReplayStage, StockSearchResult, WatchlistDailyBrief, WatchlistItem, WatchlistWeeklyReview, WeekSummary, WeeklyDecisionItem, WeeklyReview, WeeklyReviewItem } from "@pawe/contracts";
+import { isDecisionActionable, selectDecisionVersionsForDisplay } from "./decision";
 import { activeDecisionWeekId, naturalWeekId, naturalWeekIdFromDateId, replayStageItemSummary, selectPrimaryReviewVersion, shanghaiDateId, weeklyReviewTargetWeekId, weeklySelectionDeadlinePassed } from "./week";
 
 type Role = "admin" | "viewer";
@@ -470,6 +471,8 @@ function ApprovalCenter() {
   const [job, setJob] = useState<WeeklyJob | null>(null);
   const [jobs, setJobs] = useState<WeeklyJob[]>([]);
   const [taskToConfirm, setTaskToConfirm] = useState<WeeklyJob["job_type"] | null>(null);
+  const [approvalReasons, setApprovalReasons] = useState<Record<string, string>>({});
+  const [decisionToPublish, setDecisionToPublish] = useState<DecisionVersion | null>(null);
   const [replayEligibility, setReplayEligibility] = useState<ReplayEligibility[]>([]);
 
   const load = () => Promise.all([
@@ -511,7 +514,8 @@ function ApprovalCenter() {
     }
   }
   const hasRunningJob = jobs.some((item) => ["queued", "running"].includes(item.status));
-  const publishedDecisions = decisions.filter((decision) => decision.decision_type === "published" && decision.status === "published");
+  const displayedDecisions = selectDecisionVersionsForDisplay(decisions);
+  const actionableCount = displayedDecisions.filter(isDecisionActionable).length;
   useEffect(() => {
     if (!hasRunningJob) return;
     const timer = window.setInterval(() => void load(), 1200);
@@ -592,12 +596,63 @@ function ApprovalCenter() {
     }
   }
 
+  async function reviewDecision(decision: DecisionVersion, action: "approve" | "reject") {
+    const key = decisionKey(decision);
+    const reason = approvalReasons[key]?.trim() ?? "";
+    if (!reason) {
+      setError("请先填写审批理由，再提交人工审批。");
+      return;
+    }
+    setSubmitting(true);
+    setError("");
+    setNotice("");
+    try {
+      await api(`/api/v1/weeks/${weekId}/approval`, {
+        method: "POST",
+        body: JSON.stringify({
+          action: action === "reject" ? "reject" : decision.decision_type === "ai" ? "accept_ai" : "accept_rule",
+          source_type: decision.decision_type,
+          selected_codes: action === "reject" ? [] : decision.items.map((item) => item.stock_code),
+          reason,
+          decision_version: decision.version,
+          idempotency_key: crypto.randomUUID(),
+        }),
+      });
+      setNotice(action === "reject" ? `已驳回${decisionTypeLabel(decision)} V${decision.version}。` : `人工审批完成；请检查人工确认版后正式发布。`);
+      setApprovalReasons((current) => ({ ...current, [key]: "" }));
+      await load();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "人工审批提交失败");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function publishDecision(decision: DecisionVersion) {
+    setSubmitting(true);
+    setError("");
+    setNotice("");
+    try {
+      await api(`/api/v1/weeks/${weekId}/publish`, {
+        method: "POST",
+        body: JSON.stringify({ decision_version: decision.version, idempotency_key: crypto.randomUUID() }),
+      });
+      setDecisionToPublish(null);
+      setNotice(`V${decision.version} 已正式发布，主页将展示本周观察名单。`);
+      await load();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "正式发布失败");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   if (loading) return <DashboardState title="正在加载决策版本…" detail={`当前自然周：${weekId}`} />;
 
   return (
     <section className="p-6 md:px-10 md:py-6">
       <div className="flex flex-col gap-4 border-b border-black/10 pb-4 lg:flex-row lg:items-end lg:justify-between">
-        <div><p className="text-xs font-semibold tracking-[0.18em] text-emerald-800">WEEKLY APPROVAL</p><h2 className="mt-2 text-2xl font-semibold">{weekId} 决策版本</h2><p className="mt-1 text-xs text-slate-500">共 {publishedDecisions.length} 个正式发布版本</p></div>
+        <div><p className="text-xs font-semibold tracking-[0.18em] text-emerald-800">WEEKLY APPROVAL</p><h2 className="mt-2 text-2xl font-semibold">{weekId} 决策版本</h2><p className="mt-1 text-xs text-slate-500">共 {displayedDecisions.length} 个版本{actionableCount > 0 ? ` · ${actionableCount} 个待处理` : ""}</p></div>
         <div className="flex flex-wrap gap-2">
           <button disabled={submitting || hasActiveJob(jobs, "weekly_selection")} onClick={() => setTaskToConfirm("weekly_selection")} className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:opacity-50">周初名单</button>
           <button disabled={submitting || hasActiveJob(jobs, "daily_brief")} onClick={() => setTaskToConfirm("daily_brief")} className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:opacity-50">每日简报</button>
@@ -607,21 +662,28 @@ function ApprovalCenter() {
       {error && <p role="alert" className="mt-3 rounded-xl bg-red-50 px-4 py-2.5 text-sm text-red-800">{error}</p>}
       {(notice || job) && <p className={`mt-3 rounded-xl px-4 py-2.5 text-sm ${job?.status === "failed" ? "bg-red-50 text-red-800" : "bg-emerald-50 text-emerald-800"}`}>{notice || persistentJobMessage(job)}</p>}
       <div className="mt-4 grid items-start gap-4 lg:grid-cols-2">
-        <div>
-          {publishedDecisions.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-black/15 bg-white p-8 text-center"><h3 className="text-xl font-semibold">本周尚无正式发布版本</h3><p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-slate-600">这里只展示已经完成确认并正式发布的本周名单，等待发布和中间规则版本不再显示。</p></div>
-          ) : publishedDecisions.map((decision) => (
+        <div className="space-y-3">
+          {decisions.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-black/15 bg-white p-8 text-center"><h3 className="text-xl font-semibold">本周尚无决策版本</h3><p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-slate-600">执行“周初名单”后，规则结果会显示在这里并进入人工审批流程。</p></div>
+          ) : displayedDecisions.map((decision) => (
             <article key={`${decision.decision_type}-${decision.version}`} className="rounded-2xl border border-black/10 bg-white p-5">
               <div className="flex items-start justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{decisionTypeLabel(decision.decision_type)} · V{decision.version}</p><h3 className="mt-1 text-lg font-semibold">{decisionStatusLabel(decision.status)}</h3></div><span className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-600">{decision.items.length} 只</span></div>
               <ol className="mt-4 space-y-1.5">{decision.items.map((item) => <li key={item.stock_code} className="flex justify-between rounded-xl bg-[#f7f5ef] px-4 py-2.5 text-sm"><span>{item.rank}. {item.stock_name}</span><span className="font-mono text-slate-500">{item.stock_code}</span></li>)}</ol>
+              {decision.status === "awaiting_approval" && (decision.decision_type === "rule" || decision.decision_type === "ai") && <div className="mt-4 border-t border-black/10 pt-4"><label className="block text-sm font-semibold">人工审批理由<textarea aria-label={`${decisionTypeLabel(decision)} V${decision.version} 审批理由`} className="input mt-2 min-h-20 resize-y" value={approvalReasons[decisionKey(decision)] ?? ""} onChange={(event) => setApprovalReasons((current) => ({ ...current, [decisionKey(decision)]: event.target.value }))} placeholder="说明批准或驳回原因（必填）" /></label><div className="mt-3 flex flex-wrap gap-2"><button type="button" disabled={submitting} onClick={() => void reviewDecision(decision, "approve")} className="rounded-xl bg-emerald-800 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">批准此版本</button><button type="button" disabled={submitting} onClick={() => void reviewDecision(decision, "reject")} className="rounded-xl border border-red-200 px-4 py-2.5 text-sm font-semibold text-red-700 disabled:opacity-50">驳回</button></div></div>}
+              {decision.decision_type === "published" && decision.status === "approved" && <div className="mt-4 rounded-xl bg-amber-50 p-4"><p className="text-sm leading-6 text-amber-900">人工审批已完成。正式发布后，本周观察名单才会出现在主页，且当周名单将冻结。</p><button type="button" disabled={submitting} onClick={() => setDecisionToPublish(decision)} className="mt-3 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">正式发布 V{decision.version}</button></div>}
             </article>
           ))}
         </div>
         {job ? <JobProgress job={job} history={jobs} /> : <div className="rounded-2xl border border-dashed border-black/15 bg-white p-8 text-center"><h3 className="text-lg font-semibold">暂无任务审计</h3><p className="mt-2 text-sm text-slate-500">执行周初、日报或周终任务后在这里查看进度。</p></div>}
       </div>
       {taskToConfirm && <ManualTaskConfirmation taskType={taskToConfirm} targetWeekId={taskToConfirm === "weekly_review" ? reviewWeekId : taskToConfirm === "weekly_selection" ? weekId : outputWeekId} replayEligibility={replayEligibility} onPrepareCalendar={(candidateWeek) => void prepareCalendar(candidateWeek)} onClose={() => setTaskToConfirm(null)} onConfirm={(execution) => { const task = taskToConfirm; setTaskToConfirm(null); if (execution.mode === "replay") void runReplay(execution); else if (task === "weekly_selection") void runWeeklySelection(); else if (task !== "replay") void runManualOutput(task); }} />}
+      {decisionToPublish && <PublishConfirmation decision={decisionToPublish} submitting={submitting} onClose={() => setDecisionToPublish(null)} onConfirm={() => void publishDecision(decisionToPublish)} />}
     </section>
   );
+}
+
+function PublishConfirmation({ decision, submitting, onClose, onConfirm }: { decision: DecisionVersion; submitting: boolean; onClose: () => void; onConfirm: () => void }) {
+  return <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/45 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label={`正式发布 V${decision.version}`}><button type="button" aria-label="关闭发布确认" onClick={onClose} className="absolute inset-0 cursor-default" /><section className="relative z-10 w-full max-w-md rounded-[28px] bg-[#fcfbf7] p-7 shadow-2xl"><p className="text-xs font-semibold tracking-[0.18em] text-emerald-800">FORMAL PUBLICATION</p><h2 className="mt-2 text-2xl font-semibold">正式发布 V{decision.version}</h2><p className="mt-3 text-sm leading-6 text-slate-600">将发布 {decision.items.length} 只观察标的。发布后本周名单冻结，日报与周终复盘将以此版本为正式依据。</p><div className="mt-6 flex justify-end gap-3"><button type="button" disabled={submitting} onClick={onClose} className="rounded-xl border border-black/15 px-4 py-2.5 text-sm font-semibold">取消</button><button type="button" disabled={submitting} onClick={onConfirm} className="rounded-xl bg-emerald-800 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">确认正式发布</button></div></section></div>;
 }
 
 function ManualTaskConfirmation({ taskType, targetWeekId, replayEligibility, onPrepareCalendar, onClose, onConfirm }: { taskType: WeeklyJob["job_type"]; targetWeekId: string; replayEligibility: ReplayEligibility[]; onPrepareCalendar: (weekId: string) => void; onClose: () => void; onConfirm: (execution: TaskExecution) => void }) {
@@ -668,7 +730,13 @@ function ManualTaskConfirmation({ taskType, targetWeekId, replayEligibility, onP
   );
 }
 
-function decisionTypeLabel(type: DecisionType) { return type === "rule" ? "规则版" : type === "ai" ? "AI版" : "正式发布版"; }
+function decisionKey(decision: DecisionVersion) { return `${decision.decision_type}-${decision.version}`; }
+function decisionTypeLabel(decision: DecisionType | DecisionVersion) {
+  const type = typeof decision === "string" ? decision : decision.decision_type;
+  if (type === "rule") return "规则版";
+  if (type === "ai") return "AI版";
+  return typeof decision === "string" || decision.status === "published" ? "正式发布版" : "人工确认版";
+}
 function decisionStatusLabel(status: string) { return ({ awaiting_approval: "等待审批", approved: "已批准，等待发布", published: "已正式发布", superseded: "已被替代" } as Record<string, string>)[status] ?? status; }
 const jobStageLabel: Record<string, string> = {
   queued: "等待后台领取",
