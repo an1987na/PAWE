@@ -1,5 +1,7 @@
 import asyncio
+import json
 import math
+import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
@@ -261,20 +263,25 @@ class SinaDailyProvider:
         _validate_request(stock_key, start, end)
         await self._limiter.wait()
         fetched_at = datetime.now(UTC)
-        fetcher = self._fetcher or _load_akshare_sina_fetcher()
         try:
-            frame = await asyncio.wait_for(
-                asyncio.to_thread(
-                    fetcher,
-                    symbol=stock_key,
-                    start_date=start.strftime("%Y%m%d"),
-                    end_date=end.strftime("%Y%m%d"),
-                    adjust="qfq",
-                ),
-                timeout=self._policy.timeout_seconds,
-            )
+            if self._fetcher is None:
+                rows = await _fetch_sina_isolated(
+                    stock_key, start, end, self._policy.timeout_seconds
+                )
+            else:
+                frame = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        self._fetcher,
+                        symbol=stock_key,
+                        start_date=start.strftime("%Y%m%d"),
+                        end_date=end.strftime("%Y%m%d"),
+                        adjust="qfq",
+                    ),
+                    timeout=self._policy.timeout_seconds,
+                )
+                rows = _frame_records(frame)
             bars = sina.parse_qfq_daily_rows(
-                _frame_records(frame),
+                rows,
                 stock_key=stock_key,
                 start=start,
                 end=end,
@@ -291,6 +298,36 @@ class SinaDailyProvider:
             bars,
             warnings=("eastmoney_fallback",),
         )
+
+
+async def _fetch_sina_isolated(
+    stock_key: str, start: date, end: date, timeout: float
+) -> Sequence[Mapping[str, object]]:
+    # Cancelling to_thread does not stop requests/akshare. A stuck HTTP call
+    # otherwise survives its timeout and can hang asyncio executor shutdown.
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-m",
+        "pawe_api.data.sina_fetch",
+        stock_key,
+        start.isoformat(),
+        end.isoformat(),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    try:
+        stdout, _ = await asyncio.wait_for(process.communicate(), timeout=timeout)
+    except BaseException:
+        if process.returncode is None:
+            process.kill()
+        await process.communicate()
+        raise
+    if process.returncode != 0:
+        raise DailyProviderError("sina", "isolated_fetch_failed")
+    rows = json.loads(stdout)
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        raise ValueError("Sina result has an invalid record shape")
+    return rows
 
 
 def _load_akshare_sina_fetcher() -> SinaFetcher:
@@ -323,9 +360,7 @@ class EastmoneyStockMasterProvider(_HttpProvider):
         for page_number in range(2, pages + 1):
             page = await self._fetch_page(page_number, page_size, fetched_at)
             if page.total != first_page.total:
-                raise StockMasterProviderError(
-                    "stock master total changed during pagination"
-                )
+                raise StockMasterProviderError("stock master total changed during pagination")
             results.append(page)
         records = tuple(record for page in results for record in page.records)
         warnings = tuple(warning for page in results for warning in page.warnings)
@@ -398,9 +433,7 @@ class SseStockMasterProvider(_HttpProvider):
             )
             kshare = parse_sse_kshare_list(kshare_payload)
         except (DailyProviderError, StockMasterPayloadError) as exc:
-            raise StockMasterProviderError(
-                f"sse_kshare_failed:{type(exc).__name__}:{exc}"
-            ) from exc
+            raise StockMasterProviderError(f"sse_kshare_failed:{type(exc).__name__}:{exc}") from exc
         star_codes = {record.code for record in records if record.board == "star"}
         kshare_codes = {code for code, _ in kshare.securities}
         if star_codes != kshare_codes:
@@ -536,16 +569,14 @@ class OfficialStockMasterProvider:
         required_failures = [
             provider.source
             for provider, result in zip(self._providers, results, strict=True)
-            if isinstance(result, BaseException)
-            and provider.source in self._required_sources
+            if isinstance(result, BaseException) and provider.source in self._required_sources
         ]
         if required_failures:
             raise StockMasterProviderError(
                 "required stock master incomplete: " + ",".join(required_failures)
             )
         degradations = tuple(
-            "optional_market_unavailable:"
-            f"{provider.source}:{type(result).__name__}"
+            f"optional_market_unavailable:{provider.source}:{type(result).__name__}"
             for provider, result in zip(self._providers, results, strict=True)
             if isinstance(result, BaseException)
         )

@@ -1,3 +1,4 @@
+import asyncio
 import json
 from datetime import date
 from decimal import Decimal
@@ -18,14 +19,41 @@ pytestmark = pytest.mark.asyncio
 POLICY = ProviderPolicy(timeout_seconds=1, retry_count=0, min_interval_seconds=0)
 
 
+async def test_sina_timeout_kills_and_reaps_blocked_transport(monkeypatch) -> None:
+    import pawe_api.data.providers as providers
+
+    class Process:
+        returncode = None
+        killed = False
+        calls = 0
+
+        async def communicate(self):
+            self.calls += 1
+            if not self.killed:
+                await asyncio.sleep(10)
+            return b"", b""
+
+        def kill(self):
+            self.killed = True
+
+    process = Process()
+
+    async def create(*args, **kwargs):
+        return process
+
+    monkeypatch.setattr(providers.asyncio, "create_subprocess_exec", create)
+    with pytest.raises(TimeoutError):
+        await providers._fetch_sina_isolated("sz000001", date(2026, 9, 1), date(2026, 9, 4), 0.01)
+    assert process.killed
+    assert process.calls == 2
+
+
 def _tencent_payload(stock_key: str) -> str:
     return json.dumps(
         {
             "code": 0,
             "data": {
-                stock_key: {
-                    "qfqday": [["2025-02-21", "18.14", "20.69", "20.69", "18.06", "100"]]
-                }
+                stock_key: {"qfqday": [["2025-02-21", "18.14", "20.69", "20.69", "18.06", "100"]]}
             },
         }
     )
@@ -45,9 +73,7 @@ def _eastmoney_payload(code: str) -> str:
 
 async def test_tencent_provider_builds_bounded_qfq_request() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.params["param"] == (
-            "sz300383,day,2025-02-21,2025-02-28,320,qfq"
-        )
+        assert request.url.params["param"] == ("sz300383,day,2025-02-21,2025-02-28,320,qfq")
         return httpx.Response(200, text=_tencent_payload("sz300383"))
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
@@ -72,9 +98,7 @@ async def test_tencent_provider_uses_closed_quote_before_daily_refresh() -> None
             "code": 0,
             "data": {
                 "sz300383": {
-                    "qfqday": [
-                        ["2025-08-21", "12.15", "13.14", "13.16", "12.04", "100"]
-                    ],
+                    "qfqday": [["2025-08-21", "12.15", "13.14", "13.16", "12.04", "100"]],
                     "qt": {
                         "sz300383": quote,
                         "market": ["2025-08-22 15:30:00|SZ_close_已收盘"],
@@ -144,9 +168,7 @@ async def test_sina_provider_uses_bounded_qfq_request_and_preserves_amount() -> 
         return Frame()
 
     provider = SinaDailyProvider(policy=POLICY, fetcher=fetcher)
-    series = await provider.fetch(
-        "sz300383", date(2025, 2, 21), date(2025, 2, 28)
-    )
+    series = await provider.fetch("sz300383", date(2025, 2, 21), date(2025, 2, 28))
 
     assert series.source == "sina"
     assert series.bars[0].amount == 2000

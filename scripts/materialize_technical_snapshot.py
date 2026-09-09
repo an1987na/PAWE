@@ -14,6 +14,12 @@ from pawe_api.features.technical import FeatureCalculationError
 from sqlalchemy import select
 
 
+class SnapshotCoverageError(RuntimeError):
+    def __init__(self, codes: tuple[str, ...]) -> None:
+        super().__init__("classified technical snapshot coverage is incomplete")
+        self.codes = codes
+
+
 async def materialize(
     *,
     as_of: date,
@@ -75,7 +81,7 @@ async def materialize(
     if codes or limit is not None:
         raise RuntimeError("only a complete all-stock run may persist a technical snapshot")
     if failures or len(observations) != len(stocks):
-        raise RuntimeError("classified technical snapshot coverage is incomplete")
+        raise SnapshotCoverageError(tuple(failure.split(":", 1)[0] for failure in failures))
     locked_at = datetime.now(UTC)
     records = [
         SnapshotInputRecord(

@@ -1,4 +1,8 @@
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
 
 import pawe_worker.main as worker
@@ -14,11 +18,24 @@ from pawe_worker.main import (
 )
 
 
+def test_scheduler_threads_use_one_persistent_event_loop() -> None:
+    async def loop_identity():
+        await asyncio.sleep(0.01)
+        return id(asyncio.get_running_loop())
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        loops = list(executor.map(lambda _: worker._run_async(loop_identity()), range(6)))
+    assert len(set(loops)) == 1
+    assert worker._run_async(loop_identity()) == loops[0]
+
+
 def test_worker_registers_preopen_and_daily_brief_jobs() -> None:
     scheduler = build_scheduler(Settings(_env_file=None))
     jobs = {job.id: job for job in scheduler.get_jobs()}
     assert set(jobs) == {
         "weekly-job-runner",
+        "output-job-runner",
+        "daily-brief-reconciliation",
         "weekly-data-preparation",
         "weekly-preopen",
         "daily-brief",
@@ -31,6 +48,7 @@ def test_worker_registers_preopen_and_daily_brief_jobs() -> None:
     assert "hour='15'" in str(jobs["daily-brief"].trigger)
     assert "minute='30'" in str(jobs["daily-brief"].trigger)
     assert jobs["daily-brief"].misfire_grace_time == 6 * 60 * 60
+    assert jobs["daily-brief"].executor == jobs["output-job-runner"].executor == "outputs"
 
 
 def test_worker_reserves_capacity_for_long_data_preparation() -> None:
@@ -38,6 +56,48 @@ def test_worker_reserves_capacity_for_long_data_preparation() -> None:
 
     executor = scheduler._executors["default"]
     assert executor._pool._max_workers == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("permanent_failure", [False, True])
+async def test_snapshot_repair_is_targeted_bounded_and_preserves_cutoff(
+    monkeypatch, permanent_failure: bool
+) -> None:
+    previous_open = date(2026, 9, 4)
+    calendar = [SimpleNamespace(is_open=True, previous_open_date=previous_open)] * 5
+    monkeypatch.setattr(worker, "_load_week_calendar", AsyncMock(return_value=calendar))
+    monkeypatch.setattr(worker, "_ready_snapshot_id", AsyncMock(return_value=None))
+    ingest = AsyncMock()
+    monkeypatch.setattr(worker, "ingest_daily_bars", ingest)
+    failure = worker.SnapshotCoverageError(codes=("000937",))
+    materialize = AsyncMock(side_effect=[failure, failure, failure if permanent_failure else None])
+    monkeypatch.setattr(worker, "materialize_snapshot", materialize)
+    monkeypatch.setattr(worker, "_latest_snapshot_id", AsyncMock(return_value="snapshot-id"))
+    features = AsyncMock()
+    monkeypatch.setattr(worker, "materialize_v9_inputs", features)
+    now = datetime(2026, 9, 7, 20, tzinfo=ZoneInfo("Asia/Shanghai"))
+    if permanent_failure:
+        with pytest.raises(worker.SnapshotCoverageError):
+            await worker._execute_weekly_data_preparation(now=now, week_id=now.date())
+        features.assert_not_awaited()
+    else:
+        assert (
+            await worker._execute_weekly_data_preparation(now=now, week_id=now.date())
+            == "snapshot-id"
+        )
+        features.assert_awaited_once()
+    assert ingest.await_count == materialize.await_count == 3
+    assert [call.kwargs["codes"] for call in ingest.await_args_list] == [
+        (),
+        ("000937",),
+        ("000937",),
+    ]
+    for call in ingest.await_args_list:
+        assert call.args[1] == previous_open
+        assert call.kwargs["published_by"] == previous_open
+    for call in materialize.await_args_list:
+        assert call.kwargs["as_of"] == previous_open
+        assert call.kwargs["decision_cutoff"].date() == previous_open
 
 
 def test_weekly_review_snapshot_cutoff_follows_data_refresh() -> None:
@@ -172,19 +232,27 @@ def test_daily_brief_catchup_skips_incomplete_calendar() -> None:
     assert targets == ()
 
 
+def test_daily_reconciliation_recovers_yesterday_before_week_end() -> None:
+    week_id = date(2026, 8, 31)
+    calendar = tuple(week_id + timedelta(days=n) for n in range(5))
+    assert missing_daily_brief_targets(
+        target_week=week_id,
+        published_decisions={week_id: "published-v1"},
+        open_dates_by_week={week_id: calendar},
+        calendar_dates_by_week={week_id: calendar},
+        active_briefs={(week_id, "published-v1", week_id)},
+        today=date(2026, 9, 3),
+    ) == ((week_id, date(2026, 9, 1)), (week_id, date(2026, 9, 2)))
+
+
 def test_daily_brief_catchup_checks_just_finished_week_on_weekend() -> None:
     assert daily_brief_catchup_week(date(2026, 8, 29)) == date(2026, 8, 24)
     assert daily_brief_catchup_week(date(2026, 8, 30)) == date(2026, 8, 24)
+    assert daily_brief_catchup_week(
+        date(2026, 8, 31), next_open_after_previous=date(2026, 9, 1)
+    ) == date(2026, 8, 24)
     assert (
-        daily_brief_catchup_week(
-            date(2026, 8, 31), next_open_after_previous=date(2026, 9, 1)
-        )
-        == date(2026, 8, 24)
-    )
-    assert (
-        daily_brief_catchup_week(
-            date(2026, 9, 1), next_open_after_previous=date(2026, 9, 1)
-        )
+        daily_brief_catchup_week(date(2026, 9, 1), next_open_after_previous=date(2026, 9, 1))
         is None
     )
 
@@ -227,15 +295,9 @@ def test_worker_adds_daily_brief_catchup_after_due_time_only() -> None:
         settings,
         now=datetime(2026, 8, 10, 15, 29, tzinfo=timezone),
     )
-    assert "daily-brief-startup-catchup" not in {
-        job.id for job in before_due.get_jobs()
-    }
-    assert "weekly-preopen-startup-catchup" not in {
-        job.id for job in before_due.get_jobs()
-    }
-    assert "weekly-review-startup-catchup" in {
-        job.id for job in before_due.get_jobs()
-    }
+    assert "daily-brief-startup-catchup" not in {job.id for job in before_due.get_jobs()}
+    assert "weekly-preopen-startup-catchup" not in {job.id for job in before_due.get_jobs()}
+    assert "weekly-review-startup-catchup" in {job.id for job in before_due.get_jobs()}
 
     after_due = build_scheduler(settings)
     add_startup_catchups(
@@ -243,9 +305,9 @@ def test_worker_adds_daily_brief_catchup_after_due_time_only() -> None:
         settings,
         now=datetime(2026, 8, 10, 15, 31, tzinfo=timezone),
     )
-    assert "daily-brief-startup-catchup" in {
-        job.id for job in after_due.get_jobs()
-    }
+    assert "daily-brief-startup-catchup" in {job.id for job in after_due.get_jobs()}
+    assert after_due.get_job("daily-brief-startup-catchup").executor == "outputs"
+    assert after_due.get_job("weekly-review-startup-catchup").executor == "outputs"
 
     weekend = build_scheduler(settings)
     add_startup_catchups(
@@ -253,12 +315,8 @@ def test_worker_adds_daily_brief_catchup_after_due_time_only() -> None:
         settings,
         now=datetime(2026, 8, 15, 16, 0, tzinfo=timezone),
     )
-    assert "daily-brief-startup-catchup" not in {
-        job.id for job in weekend.get_jobs()
-    }
-    assert "weekly-review-startup-catchup" in {
-        job.id for job in weekend.get_jobs()
-    }
+    assert "daily-brief-startup-catchup" not in {job.id for job in weekend.get_jobs()}
+    assert "weekly-review-startup-catchup" in {job.id for job in weekend.get_jobs()}
 
 
 def test_worker_recovers_sunday_preparation_after_its_due_time() -> None:
@@ -284,6 +342,4 @@ def test_worker_recovers_monday_preopen_before_publication_deadline() -> None:
         settings,
         now=datetime(2026, 8, 17, 8, 0, tzinfo=timezone),
     )
-    assert "weekly-preopen-startup-catchup" in {
-        job.id for job in scheduler.get_jobs()
-    }
+    assert "weekly-preopen-startup-catchup" in {job.id for job in scheduler.get_jobs()}

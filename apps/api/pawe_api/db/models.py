@@ -901,6 +901,18 @@ class SourceMappingVersion(Base):
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class RulePackageRecord(Base):
+    __tablename__ = "rule_packages"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    version: Mapped[str] = mapped_column(String(64), unique=True)
+    content_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    payload: Mapped[dict[str, object]] = mapped_column(JSONB)
+    validation: Mapped[dict[str, object]] = mapped_column(JSONB)
+    created_by_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class RuleProposal(Base):
     __tablename__ = "rule_proposals"
     __table_args__ = (

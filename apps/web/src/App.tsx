@@ -1,6 +1,7 @@
 import { type FormEvent, type KeyboardEvent as ReactKeyboardEvent, useEffect, useState } from "react";
 import type { Confidence, DailyBrief, DailyBriefItem, ErrorAttribution, MarketState, ReplayRun, ReplayStage, StockSearchResult, WatchlistDailyBrief, WatchlistItem, WatchlistWeeklyReview, WeekSummary, WeeklyDecisionItem, WeeklyReview, WeeklyReviewItem } from "@pawe/contracts";
 import { isDecisionActionable, selectDecisionVersionsForDisplay } from "./decision";
+import { RulePackages } from "./RulePackages";
 import { activeDecisionWeekId, naturalWeekId, naturalWeekIdFromDateId, replayStageItemSummary, selectPrimaryReviewVersion, shanghaiDateId, weeklyReviewTargetWeekId, weeklySelectionDeadlinePassed } from "./week";
 
 type Role = "admin" | "viewer";
@@ -244,6 +245,7 @@ export function App() {
 
   async function logout() {
     await api("/api/v1/auth/logout", { method: "POST" }).catch(() => null);
+    setView("dashboard");
     setUser(null);
   }
 
@@ -437,6 +439,7 @@ function ExperimentHealthCenter() {
   if (loading) return <DashboardState title="正在加载实验治理信息…" detail="实验与正式规则保持隔离。" />;
   return (
     <section className="space-y-6 p-6 md:px-10 md:py-7">
+      <RulePackages api={api} />
       {error && <p role="alert" className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-800">{error}</p>}
       <section>
         <div className="mb-3 flex items-end justify-between gap-3"><div><p className="text-xs font-semibold tracking-[0.18em] text-emerald-800">RULE EXPERIMENTS</p><h2 className="mt-2 text-2xl font-semibold">规则实验</h2></div><p className="text-xs text-slate-500">激活默认关闭 · 必须人工批准</p></div>

@@ -1,0 +1,91 @@
+# Standalone deployment file, not an override of the desktop compose.yaml.
+# No host networking, privileged containers, Docker socket or database host ports.
+name: pawe-host
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: pawe
+      POSTGRES_USER: pawe
+      POSTGRES_PASSWORD: ${PAWE_POSTGRES_PASSWORD:?Set a unique database password}
+    volumes:
+      - type: bind
+        source: ${PAWE_DATA_DIR:?Set an absolute dedicated data directory}/postgres
+        target: /var/lib/postgresql/data
+        bind: {create_host_path: false}
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U pawe -d pawe"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    mem_limit: 1g
+    cpus: 1
+    logging: &logging
+      driver: json-file
+      options: {max-size: 10m, max-file: '3'}
+  api:
+    image: ${PAWE_API_IMAGE:?Set tested immutable API image digest}
+    restart: unless-stopped
+    env_file: ${PAWE_ENV_FILE:?Set absolute protected application env file}
+    environment:
+      PAWE_ENV: production
+      PAWE_SESSION_COOKIE_SECURE: 'true'
+      PAWE_DATABASE_URL: postgresql+asyncpg://pawe:${PAWE_POSTGRES_PASSWORD}@postgres:5432/pawe
+      PAWE_AI_CREDENTIAL_ENCRYPTION_KEY: ${PAWE_AI_CREDENTIAL_ENCRYPTION_KEY:?Set stable encryption key}
+      PAWE_EXPERIMENT_ACTIVATION_ENABLED: 'false'
+      PYTHONUNBUFFERED: '1'
+    depends_on:
+      postgres: {condition: service_healthy}
+    volumes:
+      - type: bind
+        source: ${PAWE_DATA_DIR}/artifacts
+        target: /app/data
+        bind: {create_host_path: false}
+    mem_limit: 768m
+    cpus: 1
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/ready', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging: *logging
+  worker:
+    image: ${PAWE_WORKER_IMAGE:?Set tested immutable Worker image digest}
+    restart: unless-stopped
+    # Omitted by default: enable only after database verification and old Worker shutdown.
+    profiles: [scheduler]
+    env_file: ${PAWE_ENV_FILE}
+    environment:
+      PAWE_ENV: production
+      PAWE_DATABASE_URL: postgresql+asyncpg://pawe:${PAWE_POSTGRES_PASSWORD}@postgres:5432/pawe
+      PAWE_AI_CREDENTIAL_ENCRYPTION_KEY: ${PAWE_AI_CREDENTIAL_ENCRYPTION_KEY}
+      PAWE_EXPERIMENT_ACTIVATION_ENABLED: 'false'
+      PYTHONUNBUFFERED: '1'
+    depends_on:
+      postgres: {condition: service_healthy}
+    volumes:
+      - type: bind
+        source: ${PAWE_DATA_DIR}/artifacts
+        target: /app/data
+        bind: {create_host_path: false}
+    mem_limit: 1536m
+    cpus: 2
+    stop_grace_period: 90s
+    logging: *logging
+  web:
+    image: ${PAWE_WEB_IMAGE:?Set tested immutable Web image digest}
+    restart: unless-stopped
+    depends_on:
+      api: {condition: service_healthy}
+    ports:
+      - "${PAWE_BIND_IP:?Set approved LAN IP}:${PAWE_HTTPS_PORT:-8443}:443"
+    volumes:
+      - type: bind
+        source: ${PAWE_TLS_DIR:?Set existing certificate directory}
+        target: /etc/nginx/tls
+        read_only: true
+        bind: {create_host_path: false}
+    mem_limit: 128m
+    cpus: 0.5
+    logging: *logging

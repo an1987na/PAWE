@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from datetime import UTC, date, datetime
 from typing import Annotated
@@ -5,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -103,6 +104,7 @@ from pawe_api.replay_stage.repository import (
     ReplayValidationError,
     SqlReplayApplication,
 )
+from pawe_api.rules.package_routes import router as rule_package_router
 from pawe_api.watchlist.repository import SqlWatchlistApplication, WatchlistError
 
 app = FastAPI(
@@ -110,6 +112,7 @@ app = FastAPI(
     version="0.1.0",
     description="Auditable weekly A-share research API; not trading advice.",
 )
+app.include_router(rule_package_router)
 settings = get_settings()
 app.add_middleware(
     CORSMiddleware,
@@ -217,6 +220,17 @@ def health() -> HealthResponse:
         ai_enabled=settings.ai_enabled and bool(settings.openai_api_key),
         ai_model=settings.openai_model,
     )
+
+
+@app.get("/api/v1/ready")
+async def readiness() -> dict[str, str]:
+    """Database readiness only; not a claim that scheduled outputs are complete."""
+    try:
+        async with asyncio.timeout(3), SessionFactory() as session:
+            await session.execute(text("SELECT 1"))
+    except (SQLAlchemyError, TimeoutError) as exc:
+        raise HTTPException(status_code=503, detail="Database unavailable") from exc
+    return {"status": "ready"}
 
 
 @app.get(

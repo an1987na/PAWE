@@ -43,8 +43,9 @@ from pawe_api.experiments.historical_week import (
 from pawe_api.features.market_snapshot import TechnicalSnapshotObservation
 from pawe_api.features.sector_market import build_classified_market_observations
 from pawe_api.features.weekly import build_degraded_market_state_input, build_rule_features
-from pawe_api.rules.engine import RULE_VERSION, run_v9_rules
+from pawe_api.rules.engine import RULE_VERSION
 from pawe_api.rules.models import ScoredCandidate
+from pawe_api.rules.registry import run_registered_rules
 
 CURRENT_V9_FALLBACK_WARNING = "HISTORICAL_RULE_REGISTRY_UNAVAILABLE_USING_CURRENT_V9"
 
@@ -320,7 +321,8 @@ async def calculate_weekly_selection(
             ),
         }
     )
-    rule_result = run_v9_rules(
+    rule_result = run_registered_rules(
+        version=RULE_VERSION,
         snapshot=FrozenSnapshot(
             cutoff=decision_cutoff,
             locked_at=actual_run_at,

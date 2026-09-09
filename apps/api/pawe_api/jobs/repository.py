@@ -33,8 +33,9 @@ from pawe_api.data.classification_repository import (
 )
 from pawe_api.data.snapshot import FrozenSnapshot
 from pawe_api.db import models
-from pawe_api.rules.engine import RULE_VERSION, RuleRunResult, run_v9_rules
+from pawe_api.rules.engine import RULE_VERSION, RuleRunResult
 from pawe_api.rules.models import CandidateBucket, Domain, RuleFeatures, ScoredCandidate
+from pawe_api.rules.registry import run_registered_rules
 
 
 async def _next_trading_week_start(session: AsyncSession, week_id: date) -> datetime:
@@ -753,7 +754,8 @@ class SqlJobApplication:
             if features
             else 0.0
         )
-        rule_result = run_v9_rules(
+        rule_result = run_registered_rules(
+            version=RULE_VERSION,
             snapshot=frozen,
             features=features,
             market_state_input=state_input,

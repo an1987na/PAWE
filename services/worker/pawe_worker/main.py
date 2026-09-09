@@ -1,4 +1,5 @@
 import asyncio
+import threading
 import uuid
 from collections.abc import Awaitable, Callable, Collection, Coroutine, Mapping, Sequence
 from datetime import UTC, date, datetime, time, timedelta
@@ -25,7 +26,7 @@ from pawe_api.data.providers import (
     TencentDailyProvider,
 )
 from pawe_api.db import models
-from pawe_api.db.session import SessionFactory, engine
+from pawe_api.db.session import SessionFactory
 from pawe_api.evaluation.formal import generate_formal_weekly_reviews
 from pawe_api.jobs.repository import SqlJobApplication, execute_queued_weekly_selection
 from pawe_api.replay_stage.calculation import (
@@ -54,20 +55,26 @@ from scripts.ingest_exchange_calendar import (
 from scripts.ingest_exchange_calendar import (
     ingest as ingest_exchange_calendar,
 )
+from scripts.materialize_technical_snapshot import SnapshotCoverageError
 from scripts.materialize_technical_snapshot import materialize as materialize_snapshot
 from scripts.materialize_v9_inputs import materialize as materialize_v9_inputs
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
+_event_loop: asyncio.AbstractEventLoop | None = None
+_event_loop_lock = threading.Lock()
+_preparation_lock = asyncio.Lock()
 
 
 def _run_async[T](coroutine: Coroutine[Any, Any, T]) -> T:
-    async def execute() -> T:
-        try:
-            return await coroutine
-        finally:
-            await engine.dispose()
-
-    return asyncio.run(execute())
+    # All scheduler threads share one loop, just like the API process. An asyncpg
+    # pool cannot be shared between the separate loops created by asyncio.run.
+    global _event_loop
+    with _event_loop_lock:
+        if _event_loop is None:
+            _event_loop = asyncio.new_event_loop()
+            threading.Thread(target=_event_loop.run_forever, daemon=True).start()
+        loop = _event_loop
+    return asyncio.run_coroutine_threadsafe(coroutine, loop).result()
 
 
 def run_weekly_preopen() -> None:
@@ -100,7 +107,10 @@ def run_queued_weekly_selection() -> None:
             f"queued_weekly_selection week={result.week_id.isoformat()} "
             f"status={result.status} stage={result.stage}"
         )
-        return
+
+
+def run_queued_output() -> None:
+    """Keep output jobs independent from long weekly preparation."""
     output = _run_async(execute_next_queued_output_job())
     if output is not None:
         print(
@@ -113,6 +123,13 @@ async def execute_weekly_data_preparation(
     *,
     now: datetime | None = None,
     week_id: date | None = None,
+) -> str:
+    async with _preparation_lock:
+        return await _execute_weekly_data_preparation(now=now, week_id=week_id)
+
+
+async def _execute_weekly_data_preparation(
+    *, now: datetime | None = None, week_id: date | None = None
 ) -> str:
     local_now = (now or datetime.now(SHANGHAI)).astimezone(SHANGHAI)
     target_week = week_id or upcoming_week_id(local_now.date())
@@ -150,16 +167,32 @@ async def execute_weekly_data_preparation(
         v9_available_on=target_week,
         published_by=previous_open,
     )
-    fetched_by = datetime.now(UTC)
-    await materialize_snapshot(
-        as_of=previous_open,
-        decision_cutoff=decision_cutoff,
-        fetched_by=fetched_by,
-        available_on=target_week,
-        codes=(),
-        limit=None,
-        persist=True,
-    )
+    for attempt in range(3):
+        try:
+            await materialize_snapshot(
+                as_of=previous_open,
+                decision_cutoff=decision_cutoff,
+                fetched_by=datetime.now(UTC),
+                available_on=target_week,
+                codes=(),
+                limit=None,
+                persist=True,
+            )
+            break
+        except SnapshotCoverageError as exc:
+            if attempt == 2 or not exc.codes:
+                raise
+            await ingest_daily_bars(
+                previous_open - timedelta(days=120),
+                previous_open,
+                codes=exc.codes,
+                limit=None,
+                after_code=None,
+                checkpoint=None,
+                checkpoint_path=None,
+                v9_available_on=target_week,
+                published_by=previous_open,
+            )
     snapshot_id = await _latest_snapshot_id(decision_cutoff)
     if snapshot_id is None:
         raise RuntimeError("technical snapshot was not persisted")
@@ -300,9 +333,7 @@ async def execute_next_queued_weekly_selection_with_preparation(
                     stage="data_preparation",
                     message="周初数据准备失败，任务未进入规则计算。",
                     error_code="DATA_PREPARATION_FAILED",
-                    error_message=(
-                        f"Weekly data preparation failed safely: {type(exc).__name__}"
-                    ),
+                    error_message=(f"Weekly data preparation failed safely: {type(exc).__name__}"),
                 )
     return await execute_queued_weekly_selection(
         uuid.UUID(str(job_id)),
@@ -474,12 +505,10 @@ def missing_daily_brief_targets(
     open_dates = tuple(sorted(set(open_dates_by_week.get(target_week, ()))))
     if decision_id is None or len(calendar_dates) != 5 or not open_dates:
         return ()
-    if open_dates[-1] >= today:
-        return ()
     targets.extend(
         (target_week, trade_date)
         for trade_date in open_dates
-        if (target_week, decision_id, trade_date) not in existing
+        if trade_date < today and (target_week, decision_id, trade_date) not in existing
     )
     return tuple(targets)
 
@@ -515,7 +544,7 @@ async def _missing_daily_brief_targets(*, today: date) -> tuple[tuple[date, date
             today, next_open_after_previous=next_open_after_previous
         )
         if target_week is None:
-            return ()
+            target_week = natural_week_id(today)
         decision_rows = list(
             (
                 await session.execute(
@@ -845,9 +874,7 @@ async def execute_weekly_review(
     return reviews
 
 
-def _review_generated_at(
-    started_at: datetime, *, observed_at: datetime | None = None
-) -> datetime:
+def _review_generated_at(started_at: datetime, *, observed_at: datetime | None = None) -> datetime:
     completed_at = (observed_at or datetime.now(SHANGHAI)).astimezone(SHANGHAI)
     return max(started_at, completed_at)
 
@@ -1363,16 +1390,41 @@ async def _benchmark_return(start: date, end: date) -> float:
 def build_scheduler(settings: Settings) -> BlockingScheduler:
     scheduler = BlockingScheduler(
         timezone=ZoneInfo("Asia/Shanghai"),
+        job_defaults={"misfire_grace_time": 6 * 60 * 60, "coalesce": True},
         # Data preparation can legitimately take several minutes. Keep separate
         # capacity for the durable queue poller and the close-of-day jobs so one
         # long snapshot build cannot starve every scheduled task.
-        executors={"default": ThreadPoolExecutor(max_workers=3)},
+        executors={
+            "default": ThreadPoolExecutor(max_workers=3),
+            "outputs": ThreadPoolExecutor(max_workers=1),
+        },
     )
     scheduler.add_job(
         run_queued_weekly_selection,
         trigger="interval",
         seconds=settings.job_poll_seconds,
         id="weekly-job-runner",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=6 * 60 * 60,
+    )
+    scheduler.add_job(
+        run_queued_output,
+        trigger="interval",
+        seconds=settings.job_poll_seconds,
+        id="output-job-runner",
+        executor="outputs",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        run_daily_brief_catchup,
+        trigger="interval",
+        minutes=30,
+        id="daily-brief-reconciliation",
+        executor="outputs",
         replace_existing=True,
         max_instances=1,
         coalesce=True,
@@ -1406,6 +1458,7 @@ def build_scheduler(settings: Settings) -> BlockingScheduler:
         hour=settings.daily_brief_hour,
         minute=settings.daily_brief_minute,
         id="daily-brief",
+        executor="outputs",
         replace_existing=True,
         max_instances=1,
         coalesce=True,
@@ -1437,6 +1490,7 @@ def add_startup_catchups(
                 trigger="date",
                 run_date=local_now + timedelta(seconds=1),
                 id="daily-brief-startup-catchup",
+                executor="outputs",
                 replace_existing=True,
             )
 
@@ -1471,6 +1525,7 @@ def add_startup_catchups(
         trigger="date",
         run_date=local_now + timedelta(seconds=4),
         id="weekly-review-startup-catchup",
+        executor="outputs",
         replace_existing=True,
     )
 
