@@ -10,7 +10,17 @@
 
 用户随后明确指定使用现有挂载下的 `/mnt/media/projects`，项目目录为 `/mnt/media/projects/PAWE`。此选择替代新建独立分区方案；不扩缩或格式化任何现有分区，不修改现有挂载配置。
 
-2026-09-10 已建立并复核 `/mnt/media/projects/PAWE`：父目录及项目目录均为真实目录、非符号链接，所在挂载仍为 `/dev/sda3` 的 ext4。仅确保目录存在，未修改已有权限或属主，尚未传入项目文件或启动服务。
+2026-09-10 已建立并复核 `/mnt/media/projects/PAWE`：父目录及项目目录均为真实目录、非符号链接，所在挂载仍为 `/dev/sda3` 的 ext4。建目录阶段未修改已有权限或属主；后续文件迁入状态见下节。
+
+## 2026-09-10 同步与迁入记录
+
+- 应用提交 `7c150ded6427e28f462363d216b63c996115f13a` 已推送并与 GitHub `main` 核对一致；代码迁入 `/mnt/media/projects/PAWE/releases/7c150ded6427e28f462363d216b63c996115f13a`，共 260 个追踪文件（含非敏感 `.env.example` 模板），关键源码及部署文件 SHA-256 与提交匹配。未创建 `current` 指针或启动目标服务。
+- 原机四个 PAWE 容器原已停止。只短暂启动 PostgreSQL 完成 custom-format 备份，随后停止；原数据库卷保留不变，API/Worker/Web 未启动。
+- 备份 `pawe-original-20260909T232522Z.dump` 为 14903834 bytes，SHA-256 `702bab432d2d17715a046ed398d49553a3fafa0475782ac6dc7cf741b6ee4776`；本机受保护临时目录 `/private/tmp/pawe-backup.h4bPEf`，目录 0700、文件 0600。`pg_restore --list` 校验通过（364 项），尚未做恢复演练。临时目录不是长期备份位置，正式切换前必须转存并复核。
+- 数据库备份向小主机传输被安全审批拦截，待用户明确授权此敏感数据传输，尚未传入或还原数据库。仅记录备份位置及摘要，不提交真实备份或凭据。
+- Docker 未安装；专用网桥与必要防火墙转发待确认。计划只绑定 LAN `192.168.2.1:8443`，不得占用现有 80/443 或开放 WAN；HTTPS 域名与证书方案待用户提供/确认。
+- 正式库 0020 迁移另已请求明确确认，尚未执行。部署 Compose 使用非敏感占位值通过 `config --quiet`，脚本语法与 Git 差异检查通过；这些不替代目标机运行验收。
+- 已在开发机从上述提交的干净归档构建三个 `linux/amd64` 镜像：`pawe-host-api:7c150de`（镜像 ID `sha256:469ecbf2bf4e6027a105b5a5a1cca47a584b099da6e54d1d1e6308176d0549e`）、`pawe-host-worker:7c150de`（`sha256:166147940bfb10b1dd6affeb29ffb034d6d619bd395d2b85376add940fa63a76`）、`pawe-host-web:7c150de`（`sha256:cd22c2a35e43a896329458a8c1f8603cf22297a2b7ba57e47f3ed952dccfff59`）。API/Worker 在断网验证容器中 `pip check` 与模块导入通过；镜像尚未传入小主机，未启动正式服务。镜像 ID 不等同于 registry manifest digest，上线时须按实际传输方式解析不可变引用。
 
 ## 文件与使用
 
@@ -60,4 +70,4 @@ PYTHONPATH=apps/api .venv/bin/python -m scripts.export_rule_package \
 
 后端 310 项测试通过，Mypy 94 文件、Ruff 通过；前端 19 项测试、构建通过，新 Web 部署镜像独立构建通过（不是目标设备部署验证）。临时 PostgreSQL 完成全量在线迁移及 0020 downgrade/upgrade；真实 API 验证上传、幂等、内容冲突、CSRF、普通用户拒绝、大小和字段限制。真实浏览器验证桌面/390px 移动端正常上传及非法包错误，移动端无横向溢出；普通用户无管理入口。验收同时修复退出后保留上一账号管理页标题的状态残留。
 
-全历史离线 SQL 生成在既有迁移的 JSONB 字面量处失败；本次 0019→0020 离线 SQL 可生成，实际在线迁移通过。未把该历史限制宣称已修复。当前代码未部署至正式 API/Web，也未推送 GitHub。
+全历史离线 SQL 生成在既有迁移的 JSONB 字面量处失败；本次 0019→0020 离线 SQL 可生成，实际在线迁移通过。未把该历史限制宣称已修复。上述为第一阶段验证；后续 GitHub 同步与迁入状态见本文件 2026-09-10 记录，正式 API/Web 尚未切换。
