@@ -41,7 +41,7 @@
 | `GET /me/watchlist/weeks/{week_id}/review` | 本人该周实际关注期间的周终复盘 |
 | `GET /weeks/{week_id}/briefs/{trade_date}` | 指定交易日简报详情 |
 | `POST /jobs/weekly-selection` | 手动触发周初任务，默认仅所有者 |
-| `POST /jobs/output` | 管理员手动触发指定交易日日报或指定自然周周终复盘 |
+| `POST /jobs/output` | 管理员手动触发指定交易日日报或指定自然周周终复盘；日报设置 `catch_up_week: true` 时，先按日期补齐同周此前到期的缺失日报，再处理目标日；默认 false 保持单日兼容 |
 | `GET /replays/eligible-weeks` | 管理员查询已越过正式窗口且满足日历边界的历史回溯周/交易日 |
 | `POST /replays/prepare-calendar` | 管理员 + CSRF 显式使用官方/备份交易日历准备目标周；质量不足或来源不可用时不创建任务 |
 | `POST /jobs/replay` | 管理员排队隔离历史回溯；支持周初、日报（单日/补齐缺失）和周终三阶段 |

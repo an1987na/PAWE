@@ -28,7 +28,11 @@ from pawe_api.data.providers import (
 from pawe_api.db import models
 from pawe_api.db.session import SessionFactory
 from pawe_api.evaluation.formal import generate_formal_weekly_reviews
-from pawe_api.jobs.repository import SqlJobApplication, execute_queued_weekly_selection
+from pawe_api.jobs.repository import (
+    SqlJobApplication,
+    _next_trading_week_start,
+    execute_queued_weekly_selection,
+)
 from pawe_api.replay_stage.calculation import (
     StagedReplayCalculationError,
     calculate_daily_brief,
@@ -987,35 +991,136 @@ async def execute_next_queued_output_job(
                 raise ValueError("daily brief job is missing trade_date")
             target_date = date.fromisoformat(raw_trade_date)
             due_at = datetime.combine(target_date, time(15, 30), tzinfo=SHANGHAI)
-            if target_date > local_now.date() or local_now < due_at:
+            catch_up_week = claimed.details.get("catch_up_week") is True
+            if target_date > local_now.date() or (not catch_up_week and local_now < due_at):
                 return await _finish_output_failure(
                     job_id,
                     "daily_gate",
                     "OUTPUT_NOT_READY",
                     "日报只能在目标交易日 15:30 后人工生成。",
                 )
-            await _update_output_progress(
-                job_id,
-                "daily_data_fetch",
-                45,
-                "正在抓取目标交易日收盘行情并核对数据质量。",
+            if catch_up_week:
+                catchup_gate = await _manual_daily_catchup_gate(claimed.week_id, local_now)
+                if catchup_gate is not None:
+                    error_code, message = catchup_gate
+                    return await _finish_output_failure(
+                        job_id, "daily_catchup_gate", error_code, message
+                    )
+            catchup_through = (
+                target_date if local_now >= due_at else target_date - timedelta(days=1)
             )
-            brief = await execute_daily_brief(now=local_now, trade_date=target_date)
-            if brief is None:
+            targets = (
+                await _manual_daily_brief_targets(
+                    week_id=claimed.week_id,
+                    through=catchup_through,
+                )
+                if catch_up_week
+                else ()
+            )
+            outcomes: list[dict[str, object]] = []
+            execution_dates = targets if catch_up_week else (target_date,)
+            if not execution_dates:
+                if local_now >= due_at:
+                    return await _finish_output_success(
+                        job_id,
+                        "daily_brief_ready",
+                        "本周截至目标日的日报均已存在，本次未重复执行。",
+                        {
+                            "trade_date": target_date.isoformat(),
+                            "daily_outcomes": [],
+                            "reused": True,
+                        },
+                    )
                 return await _finish_output_failure(
                     job_id,
                     "daily_gate",
-                    "OUTPUT_NOT_AVAILABLE",
-                    "目标日休市、没有正式发布名单或缺少可用收盘数据。",
+                    "OUTPUT_NOT_READY",
+                    "日报只能在目标交易日 15:30 后人工生成，且本周没有已结束的缺失日报。",
                 )
+            for index, execution_date in enumerate(execution_dates):
+                if catch_up_week and await _output_job_cancel_requested(job_id):
+                    return await _finish_output_failure_with_details(
+                        job_id,
+                        "cancelled",
+                        "JOB_CANCELLED",
+                        "任务已安全停止。",
+                        {"daily_outcomes": outcomes},
+                    )
+                percent = 20 + int(65 * index / len(execution_dates))
+                await _update_output_progress(
+                    job_id,
+                    "daily_catchup" if execution_date != target_date else "daily_data_fetch",
+                    percent,
+                    f"正在处理 {execution_date.isoformat()} 日报"
+                    f"（{index + 1}/{len(execution_dates)}）。",
+                )
+                try:
+                    brief = await execute_daily_brief(now=local_now, trade_date=execution_date)
+                except Exception as exc:
+                    outcomes.append(
+                        {
+                            "trade_date": execution_date.isoformat(),
+                            "status": "failed",
+                            "error_type": type(exc).__name__,
+                        }
+                    )
+                    brief = None
+                if brief is None and (
+                    not outcomes or outcomes[-1]["trade_date"] != execution_date.isoformat()
+                ):
+                    outcomes.append(
+                        {"trade_date": execution_date.isoformat(), "status": "unavailable"}
+                    )
+                elif brief is not None:
+                    outcomes.append(
+                        {
+                            "trade_date": execution_date.isoformat(),
+                            "status": "generated",
+                            "output_count": len(brief.items),
+                            "quality": brief.quality.value,
+                        }
+                    )
+                outcome = outcomes[-1]
+                await _update_output_progress(
+                    job_id,
+                    "daily_catchup" if catch_up_week else "daily_data_fetch",
+                    20 + int(65 * (index + 1) / len(execution_dates)),
+                    f"{execution_date.isoformat()} 日报"
+                    + (
+                        "已完成。"
+                        if outcome["status"] == "generated"
+                        else "未完成，将保留失败记录。"
+                    ),
+                )
+                if catch_up_week and await _output_job_cancel_requested(job_id):
+                    return await _finish_output_failure_with_details(
+                        job_id,
+                        "cancelled",
+                        "JOB_CANCELLED",
+                        "任务已在逐日报表边界安全停止。",
+                        {"daily_outcomes": outcomes},
+                    )
+            failed = [item for item in outcomes if item["status"] != "generated"]
+            if failed:
+                return await _finish_output_failure_with_details(
+                    job_id,
+                    "daily_catchup_failed",
+                    "DAILY_BRIEF_FAILED",
+                    "未完成日期："
+                    + "、".join(str(item["trade_date"]) for item in failed)
+                    + "；其他日期已继续处理，可再次点击补缺。",
+                    {"daily_outcomes": outcomes},
+                )
+            last = outcomes[-1]
             return await _finish_output_success(
                 job_id,
                 "daily_brief_ready",
-                f"{target_date.isoformat()} 日报已生成，共 {len(brief.items)} 只标的。",
+                f"已按日期顺序完成 {len(outcomes)} 份日报。",
                 {
                     "trade_date": target_date.isoformat(),
-                    "output_count": len(brief.items),
-                    "quality": brief.quality.value,
+                    "output_count": last["output_count"],
+                    "quality": last["quality"],
+                    "daily_outcomes": outcomes,
                 },
             )
         if claimed.job_type == "weekly_review":
@@ -1325,6 +1430,72 @@ async def _weekly_review_due_at(week_id: date) -> datetime | None:
     return datetime.combine(open_dates[-1], time(15, 30), tzinfo=SHANGHAI)
 
 
+async def _manual_daily_catchup_gate(week_id: date, now: datetime) -> tuple[str, str] | None:
+    async with SessionFactory() as session:
+        if now < datetime.combine(week_id, time(0), tzinfo=SHANGHAI):
+            return "OUTPUT_NOT_READY", "目标周尚未开始。"
+        if now >= await _next_trading_week_start(session, week_id):
+            return "OUTPUT_NOT_AVAILABLE", "目标周已进入历史窗口，请使用整周历史回溯。"
+        dates = set(
+            await session.scalars(
+                select(models.TradingCalendar.trade_date).where(
+                    models.TradingCalendar.trade_date >= week_id,
+                    models.TradingCalendar.trade_date <= week_id + timedelta(days=4),
+                )
+            )
+        )
+        if dates != {week_id + timedelta(days=i) for i in range(5)}:
+            return "OUTPUT_NOT_AVAILABLE", "本周交易日历不完整，无法可靠检查日报缺口。"
+    return None
+
+
+async def _manual_daily_brief_targets(*, week_id: date, through: date) -> tuple[date, ...]:
+    """Return missing open dates in exactly the requested natural week."""
+    async with SessionFactory() as session:
+        decision_id = await session.scalar(
+            select(models.DecisionSet.id)
+            .where(
+                models.DecisionSet.week_id == week_id,
+                models.DecisionSet.type == "published",
+                models.DecisionSet.status == "published",
+                models.DecisionSet.is_active.is_(True),
+            )
+            .order_by(models.DecisionSet.version.desc())
+            .limit(1)
+        )
+        if decision_id is None:
+            raise ValueError("本周尚无正式发布名单，无法生成正式日报。")
+        open_dates = tuple(
+            await session.scalars(
+                select(models.TradingCalendar.trade_date)
+                .where(
+                    models.TradingCalendar.trade_date >= week_id,
+                    models.TradingCalendar.trade_date <= through,
+                    models.TradingCalendar.trade_date <= week_id + timedelta(days=4),
+                    models.TradingCalendar.is_open.is_(True),
+                )
+                .order_by(models.TradingCalendar.trade_date)
+            )
+        )
+        completed_dates = set(
+            await session.scalars(
+                select(models.DailyBrief.trade_date).where(
+                    models.DailyBrief.week_id == week_id,
+                    models.DailyBrief.decision_set_id == decision_id,
+                    models.DailyBrief.trade_date.in_(open_dates),
+                    models.DailyBrief.status == "published",
+                    models.DailyBrief.is_active.is_(True),
+                )
+            )
+        )
+    return tuple(trade_date for trade_date in open_dates if trade_date not in completed_dates)
+
+
+async def _output_job_cancel_requested(job_id: uuid.UUID) -> bool:
+    async with SessionFactory() as session:
+        return await SqlJobApplication(session).output_job_cancel_requested(job_id)
+
+
 async def _update_output_progress(
     job_id: uuid.UUID,
     stage: str,
@@ -1368,6 +1539,25 @@ async def _finish_output_failure(
             succeeded=False,
             stage=stage,
             message=message,
+            error_code=error_code,
+            error_message=message,
+        )
+
+
+async def _finish_output_failure_with_details(
+    job_id: uuid.UUID,
+    stage: str,
+    error_code: str,
+    message: str,
+    details: dict[str, object],
+) -> JobResponse:
+    async with SessionFactory() as session:
+        return await SqlJobApplication(session).finish_output_job(
+            job_id,
+            succeeded=False,
+            stage=stage,
+            message=message,
+            details=details,
             error_code=error_code,
             error_message=message,
         )

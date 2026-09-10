@@ -759,6 +759,7 @@ class ManualOutputJobRequest(BaseModel):
     job_type: Literal["daily_brief", "weekly_review"]
     week_id: date
     trade_date: date | None = None
+    catch_up_week: bool = False
     idempotency_key: str = Field(min_length=8, max_length=64)
 
     @model_validator(mode="after")
@@ -772,6 +773,8 @@ class ManualOutputJobRequest(BaseModel):
                 raise ValueError("trade_date must belong to week_id")
         elif self.trade_date is not None:
             raise ValueError("trade_date is only valid for a daily brief job")
+        elif self.catch_up_week:
+            raise ValueError("catch_up_week is only valid for a daily brief job")
         return self
 
 

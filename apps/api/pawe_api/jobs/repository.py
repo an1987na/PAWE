@@ -249,9 +249,16 @@ class SqlJobApplication:
                 completed_job = await self.session.scalar(
                     completed_job_query.order_by(models.Job.created_at.desc()).limit(1)
                 )
-                if completed_output_id is not None and completed_job is not None:
+                reuse_completed_output = not (
+                    request.job_type == "daily_brief" and request.catch_up_week
+                )
+                if (
+                    reuse_completed_output
+                    and completed_output_id is not None
+                    and completed_job is not None
+                ):
                     return _response(completed_job)
-                if completed_output_id is not None:
+                if reuse_completed_output and completed_output_id is not None:
                     target_label = (
                         request.trade_date.isoformat()
                         if request.trade_date is not None
@@ -323,7 +330,8 @@ class SqlJobApplication:
                         now,
                         f"{target_label} 产出任务已进入队列，等待后台执行器领取。",
                     )
-                    | ({"trade_date": target_label} if request.trade_date else {}),
+                    | ({"trade_date": target_label} if request.trade_date else {})
+                    | ({"catch_up_week": True} if request.catch_up_week else {}),
                     created_at=now,
                     started_at=None,
                     finished_at=None,
@@ -462,6 +470,13 @@ class SqlJobApplication:
                 datetime.now(UTC),
                 message,
             )
+
+    async def output_job_cancel_requested(self, job_id: uuid.UUID) -> bool:
+        return bool(
+            await self.session.scalar(
+                select(models.Job.cancel_requested_at).where(models.Job.id == job_id)
+            )
+        )
 
     async def trigger_weekly_selection(
         self,

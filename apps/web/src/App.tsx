@@ -560,13 +560,14 @@ function ApprovalCenter() {
         body: JSON.stringify({
           job_type: jobType,
           week_id: jobType === "weekly_review" ? reviewWeekId : outputWeekId,
-          ...(jobType === "daily_brief" ? { trade_date: today } : {}),
+          ...(jobType === "daily_brief" ? { trade_date: today, catch_up_week: true } : {}),
           idempotency_key: crypto.randomUUID(),
         }),
       });
       setJob(result);
       if (result.status === "failed") setError(jobErrorLabel(result.error_code));
-      else if (result.status === "succeeded") setNotice(`本周${jobType === "daily_brief" ? "日报" : "周终复盘"}已经生成，本次未重复执行。`);
+      else if (result.status === "succeeded") setNotice(jobType === "daily_brief" ? persistentJobMessage(result) : "本周周终复盘已经生成，本次未重复执行。");
+      else if (jobType === "daily_brief") setNotice("日报任务已排队：先按日期补齐本周缺失日报，再处理当日；已有日报会复用。");
       await load();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "产出任务启动失败");
@@ -716,6 +717,7 @@ function ManualTaskConfirmation({ taskType, targetWeekId, replayEligibility, onP
         <p className="text-xs font-semibold tracking-[0.18em] text-emerald-800">MANUAL TASK</p>
         <h2 className="mt-2 text-2xl font-semibold">执行本周{taskLabel}任务</h2>
         <p className="mt-3 text-sm leading-6 text-slate-600">目标周：{mode === "formal" ? targetWeekId : replayWeekId}。{mode === "replay" ? "整周回溯会依次生成周初名单、全部交易日日报和周终复盘，只写入隔离历史数据。" : "在下一交易周开始前均按当周正式任务处理；补生成仍严格使用原定数据截止点。"}</p>
+        {taskType === "daily_brief" && <p className="mt-3 rounded-xl bg-emerald-50 p-3 text-sm leading-6 text-emerald-900">先检查并按日期补齐本周已结束交易日的缺失日报，再处理当日。已有日报不重复生成；当日未到 15:30 或休市时，只补齐已到期的日期。部分日期失败会保留成功结果，可再次点击重试。</p>}
         {allowReplay && <div className="mt-4 grid grid-cols-2 gap-2 rounded-xl bg-slate-100 p-1">
           <button type="button" className={`rounded-lg px-3 py-2 text-sm font-semibold ${mode === "formal" ? "bg-white shadow-sm" : "text-slate-500"}`} onClick={() => setMode("formal")}>生成本周（正式）</button>
           <button type="button" className={`rounded-lg px-3 py-2 text-sm font-semibold ${mode === "replay" ? "bg-white shadow-sm" : "text-slate-500"}`} onClick={() => setMode("replay")}>历史回溯</button>
@@ -758,6 +760,8 @@ const jobStageLabel: Record<string, string> = {
   daily_gate: "核对日报生成条件",
   daily_data_fetch: "抓取收盘行情",
   daily_brief_ready: "日报已生成",
+  daily_catchup: "补齐本周缺失日报",
+  daily_catchup_failed: "本周日报未全部完成",
   review_gate: "核对周终复盘条件",
   review_data_fetch: "补齐周终行情",
   review_generation: "计算周终指标",
