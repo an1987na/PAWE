@@ -1,6 +1,6 @@
 # PAWE
 
-小主机迁移与规则包更新正在分阶段实施，当前部署前置条件、已完成能力和未完成项见 [部署说明](deploy/README.md)。尚未切换正式服务或激活候选规则。
+2026-09-10 已将服务与数据库迁至 OpenWrt 小主机，公网入口为 [PAWE](https://pawe.foxerlove.cn)，VPS 仅转发 HTTPS 访问。部署验收、已知数据源限制及回退方式见 [部署说明](deploy/README.md)。候选规则尚未激活。
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 

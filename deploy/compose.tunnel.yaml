@@ -1,0 +1,89 @@
+# Standalone OpenWrt deployment: the web endpoint is loopback-only.
+# HTTPS is terminated on the VPS; SSH encrypts the complete inter-host hop.
+name: pawe-host
+services:
+  postgres:
+    image: ${PAWE_POSTGRES_IMAGE:?Set verified PostgreSQL image ID}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: pawe
+      POSTGRES_USER: pawe
+      POSTGRES_PASSWORD: ${PAWE_POSTGRES_PASSWORD:?Set unique database password}
+    volumes:
+      - type: bind
+        source: ${PAWE_DATA_DIR:?}/postgres
+        target: /var/lib/postgresql/data
+        bind: {create_host_path: false}
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U pawe -d pawe"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    mem_limit: 1g
+    cpus: 1
+    logging: &logging
+      driver: json-file
+      options: {max-size: 10m, max-file: '3'}
+  api:
+    image: ${PAWE_API_IMAGE:?Set verified API image ID}
+    restart: unless-stopped
+    env_file: ${PAWE_ENV_FILE:?}
+    environment: &application
+      PAWE_ENV: production
+      PAWE_SESSION_COOKIE_SECURE: 'true'
+      PAWE_ALLOWED_WEB_ORIGINS: https://pawe.foxerlove.cn
+      PAWE_DATABASE_URL: postgresql+asyncpg://pawe:${PAWE_POSTGRES_PASSWORD}@postgres:5432/pawe
+      PAWE_AI_CREDENTIAL_ENCRYPTION_KEY: ${PAWE_AI_CREDENTIAL_ENCRYPTION_KEY:?}
+      PAWE_EXPERIMENT_ACTIVATION_ENABLED: 'false'
+      PYTHONUNBUFFERED: '1'
+    depends_on:
+      postgres: {condition: service_healthy}
+    volumes: &artifacts
+      - type: bind
+        source: ${PAWE_DATA_DIR}/artifacts
+        target: /app/data
+        bind: {create_host_path: false}
+    mem_limit: 768m
+    cpus: 1
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/ready', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging: *logging
+  worker:
+    image: ${PAWE_WORKER_IMAGE:?Set verified Worker image ID}
+    restart: unless-stopped
+    profiles: [scheduler]
+    env_file: ${PAWE_ENV_FILE}
+    environment: *application
+    depends_on:
+      postgres: {condition: service_healthy}
+    volumes: *artifacts
+    mem_limit: 1536m
+    cpus: 2
+    stop_grace_period: 90s
+    logging: *logging
+  web:
+    image: ${PAWE_WEB_IMAGE:?Set verified Web image ID}
+    restart: unless-stopped
+    depends_on:
+      api: {condition: service_healthy}
+    ports: ["127.0.0.1:18080:80"]
+    volumes:
+      - type: bind
+        source: ./nginx.tunnel.conf
+        target: /etc/nginx/conf.d/default.conf
+        read_only: true
+        bind: {create_host_path: false}
+    mem_limit: 128m
+    cpus: 0.5
+    logging: *logging
+networks:
+  default:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: br-pawe
+    ipam:
+      config:
+        - subnet: ${PAWE_DOCKER_SUBNET:?Set verified non-conflicting subnet}

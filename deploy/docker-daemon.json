@@ -1,0 +1,14 @@
+{
+  "data-root": "/mnt/media/projects/PAWE/docker",
+  "exec-root": "/var/run/pawe-docker",
+  "pidfile": "/var/run/pawe-docker.pid",
+  "hosts": ["unix:///var/run/docker.sock"],
+  "bridge": "none",
+  "ip-forward": false,
+  "ip-forward-no-drop": true,
+  "ip6tables": false,
+  "ipv6": false,
+  "log-level": "warn",
+  "log-driver": "json-file",
+  "log-opts": {"max-size": "10m", "max-file": "3"}
+}

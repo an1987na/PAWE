@@ -1,0 +1,7 @@
+# Included inside inet fw4. Only PAWE traffic to the existing Nikki fake-IP
+# pool is routed through Nikki's existing mark/table; LAN rules stay unchanged.
+# Verified on this host: fake-IP 198.18.0.0/16, fwmark 0x81/0xff, table 81.
+chain pawe_fakeip_route {
+    type filter hook prerouting priority mangle - 2; policy accept;
+    iifname "br-pawe" ip daddr 198.18.0.0/16 meta l4proto { tcp, udp } ct direction original meta mark set (meta mark & 0xffffff00) | 0x81 counter
+}
