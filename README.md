@@ -37,7 +37,15 @@ Apache-2.0 许可证开源，欢迎通过 Issue 和 Pull Request 参与改进；
 - uv 0.12 或更高
 - Node.js 22 或更高
 - pnpm 11
-- Docker Compose（仅容器集成时需要）
+- Docker Compose（仅小主机隔离验证与部署使用；原 Mac PAWE Docker 环境弃用）
+
+开发协作统一使用 GPT-6.1 Sol、`high` 推理强度，不按职责分流。具体执行边界见 [AGENTS.md](AGENTS.md)。
+
+### 本地开发与部署边界
+
+默认流程为本地开发验证、推送 GitHub、恢复小主机局域网访问后部署。不在局域网时，Mac 可使用原生 Python/Node 完成针对性测试、类型检查、构建和浏览器验证，无需等待小主机；不启动旧 Mac Docker 环境。测试必须使用独立配置、测试数据库及虚构或脱敏数据，不沿用迁移前正式 `.env` 或旧正式数据，不运行正式定时任务。
+
+PostgreSQL/Linux 集成检查使用独立原生测试库、小主机隔离环境或另行配置的 GitHub CI；当前仓库尚未配置 CI。未执行的目标机检查应明确记录为待验证，不能将本地通过或 GitHub 已推送视作小主机已部署。回到局域网后从 GitHub 获取明确提交，核对运行状态，在授权范围内备份、部署和验收，保留可回退镜像；正式迁移、补跑和发布的审批要求不变。公网直接部署方案尚未启用。
 
 ## 初始化
 
@@ -46,7 +54,7 @@ uv sync --all-groups
 pnpm install
 ```
 
-复制 `.env.example` 为 `.env` 后按需填写。`PAWE_BOOTSTRAP_ADMIN_PASSWORD` 只允许保存在本机且不得提交到 Git；正式部署前必须更换为至少 12 位的强密码。没有 OpenAI API Key 时保持 `PAWE_AI_ENABLED=false`，系统使用确定性 Mock/降级路径。
+开发配置从 `.env.example` 单独创建，数据库和管理员仅指向独立开发环境，不复用迁移前正式配置。`PAWE_BOOTSTRAP_ADMIN_PASSWORD` 只允许保存在受保护配置中且不得提交到 Git；正式部署前必须更换为至少 12 位的强密码。没有 OpenAI API Key 时保持 `PAWE_AI_ENABLED=false`，系统保留确定性结果并写跳过/降级审计；Mock 仅可由隔离测试显式注入。
 
 首次迁移后幂等创建管理员：
 

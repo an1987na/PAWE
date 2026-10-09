@@ -70,7 +70,9 @@
 
 所有脚本都使用 `sh deploy/<name>.sh` 执行。运行位置为仓库根目录。Compose 变量应由受保护的部署环境提供：`PAWE_POSTGRES_PASSWORD`（使用 URL-safe 高熵随机值）、`PAWE_AI_CREDENTIAL_ENCRYPTION_KEY`、`PAWE_ENV_FILE`（绝对路径）、`PAWE_DATA_DIR`、`PAWE_STORAGE_MOUNT`、`PAWE_TLS_DIR`、`PAWE_BIND_IP`、`PAWE_HTTPS_PORT`（默认 8443）、三个 `PAWE_*_IMAGE` digest；备份另需 `PAWE_BACKUP_DIR`。保护 env 文件权限，禁止提交真实值或输出展开后的 Compose 配置。
 
-镜像应在开发/构建机为 linux/amd64 构建并完成验证后传入小主机，不在网关上大规模构建。Web 使用 `docker build -f deploy/web.Dockerfile`；API/Worker 使用原 Dockerfile。后端完整依赖锁定和镜像构建供应链加固仍待完成，不能把本配置视作已经生产验收。
+日常更新采用“Mac 原生开发验证 → GitHub → 局域网内小主机验收与部署”。不在局域网时可以完成开发及 GitHub 同步，但不把推送当作上线；原 Mac PAWE Docker 环境弃用，不在 Mac 上运行下述容器构建命令。恢复局域网访问后，以明确 GitHub 提交进行小主机隔离验证，并在已有部署授权范围内执行备份、切换、健康检查与回退准备；正式库迁移、补跑及发布仍须满足各自确认要求。公网管理隧道部署方案尚未启用。
+
+镜像应在获授权的 Linux 构建环境为 linux/amd64 构建并完成验证后传入小主机，不在网关上大规模构建。当前未配置 GitHub CI，不宣称已有云端构建；小主机复用已验证基础镜像的轻量代码叠加仍须先完成隔离验证。Web 使用 `docker build -f deploy/web.Dockerfile`；API/Worker 使用原 Dockerfile。后端完整依赖锁定和镜像构建供应链加固仍待完成，不能把本配置视作已经生产验收。
 
 ## 无重启存储方案
 
