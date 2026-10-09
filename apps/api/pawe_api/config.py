@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 from typing import Literal
 
@@ -7,7 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=os.environ.get("PAWE_ENV_FILE", ".env"),
         env_prefix="PAWE_",
         extra="ignore",
     )
@@ -18,22 +19,23 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-5.6-sol"
     ai_credential_encryption_key: str | None = None
     ai_enabled: bool = False
+    ai_reasoning_effort: Literal["low", "medium", "high", "xhigh", "max"] = "low"
     ai_weekly_selection_enabled: bool = False
     ai_weekly_selection_model: str | None = None
-    ai_weekly_selection_timeout_seconds: int = Field(default=20, ge=1, le=120)
-    ai_weekly_selection_max_output_tokens: int = Field(default=1200, ge=128, le=8000)
+    ai_weekly_selection_timeout_seconds: int = Field(default=45, ge=1, le=120)
+    ai_weekly_selection_max_output_tokens: int = Field(default=4000, ge=128, le=8000)
     ai_weekly_review_enabled: bool = False
     ai_weekly_review_model: str | None = None
-    ai_weekly_review_timeout_seconds: int = Field(default=20, ge=1, le=120)
-    ai_weekly_review_max_output_tokens: int = Field(default=1000, ge=128, le=8000)
+    ai_weekly_review_timeout_seconds: int = Field(default=45, ge=1, le=120)
+    ai_weekly_review_max_output_tokens: int = Field(default=4000, ge=128, le=8000)
     ai_error_attribution_enabled: bool = False
     ai_error_attribution_model: str | None = None
-    ai_error_attribution_timeout_seconds: int = Field(default=20, ge=1, le=120)
-    ai_error_attribution_max_output_tokens: int = Field(default=1000, ge=128, le=8000)
+    ai_error_attribution_timeout_seconds: int = Field(default=45, ge=1, le=120)
+    ai_error_attribution_max_output_tokens: int = Field(default=4000, ge=128, le=8000)
     ai_rule_evolution_enabled: bool = False
     ai_rule_evolution_model: str | None = None
-    ai_rule_evolution_timeout_seconds: int = Field(default=20, ge=1, le=120)
-    ai_rule_evolution_max_output_tokens: int = Field(default=1200, ge=128, le=8000)
+    ai_rule_evolution_timeout_seconds: int = Field(default=45, ge=1, le=120)
+    ai_rule_evolution_max_output_tokens: int = Field(default=4000, ge=128, le=8000)
     experiment_activation_enabled: bool = False
     weekly_preopen_hour: int = Field(default=8, ge=0, le=23)
     weekly_preopen_minute: int = Field(default=30, ge=0, le=59)

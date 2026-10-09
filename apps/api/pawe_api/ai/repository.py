@@ -70,7 +70,7 @@ async def save_invocation(
             subject_id=subject_id,
             input_fingerprint=input_fingerprint,
             output_hash=fingerprint(output) if output is not None else None,
-            validation={"status": status},
+            validation={"status": status, "error_code": error_code, "error_message": error_message},
             warnings=warnings,
             created_by_user_id=actor_id,
             created_at=now,

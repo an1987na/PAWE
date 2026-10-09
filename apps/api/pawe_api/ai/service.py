@@ -1,5 +1,6 @@
 import time
 import uuid
+from collections.abc import Callable
 from datetime import UTC, date, datetime
 from typing import Any, cast
 
@@ -8,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from pawe_api.ai.audit import fingerprint
 from pawe_api.ai.contracts import (
+    ConnectionCheckOutput,
     ErrorAttributionOutput,
     RuleEvolutionOutput,
     WeeklyReviewOutput,
@@ -26,6 +28,7 @@ from pawe_api.ai.provider import (
 from pawe_api.ai.repository import _invocation_response, save_invocation
 from pawe_api.config import Settings, get_settings
 from pawe_api.contracts import (
+    AIConnectionCheckResponse,
     AIInvocationResponse,
     AIProposalResponse,
     RuleProposalRequest,
@@ -47,6 +50,43 @@ class AIService:
         self.settings = settings or get_settings()
         # A mock is opt-in for isolated tests; production defaults to no provider.
         self.mock_provider = mock_provider
+
+    async def check_connection(
+        self, session: AsyncSession, *, actor_id: uuid.UUID
+    ) -> AIConnectionCheckResponse:
+        personal = await personal_provider_config(session, actor_id, self.settings)
+        model = personal[1] if personal else self.settings.openai_model
+        key = (
+            personal[0]
+            if personal
+            else (self.settings.openai_api_key if self.settings.ai_enabled else None)
+        )
+        start = time.monotonic()
+        try:
+            if not key:
+                raise AIProviderError("AI_KEY_MISSING", "请先保存本人 API 凭据或启用系统凭据。")
+            # A real bounded call, not a check of whether a credential row exists.
+            # No business data, no mock, and no publication/attribution writes.
+            await OpenAIResponsesProvider(key).complete(
+                AIProviderConfig("connection_check", model, True, 30, 1000),
+                '仅返回结构化结果 {"result":"ok"}，不分析任何业务数据。',
+                {"purpose": "connection_check"},
+                ConnectionCheckOutput,
+            )
+        except AIProviderError as exc:
+            return AIConnectionCheckResponse(
+                status="failed",
+                model=model,
+                latency_ms=int((time.monotonic() - start) * 1000),
+                error_code=exc.code,
+                message=str(exc),
+            )
+        return AIConnectionCheckResponse(
+            status="succeeded",
+            model=model,
+            latency_ms=int((time.monotonic() - start) * 1000),
+            message="模型连接及结构化输出验证成功；业务任务仍需满足数据与审批门禁。",
+        )
 
     async def weekly_selection(
         self,
@@ -93,7 +133,7 @@ class AIService:
                 for item, stock in result.all()
             ]
         if not rows or week_id is None and replay_run_id is None:
-            raise AIDomainError("server-side rule/replay candidates are unavailable")
+            raise AIDomainError("该周暂无服务端规则候选，请先生成规则名单或选择已有候选的周。")
         effective_week_id = week_id
         if effective_week_id is None and replay_run_id is not None:
             replay = await session.get(models.ReplayRun, replay_run_id)
@@ -108,6 +148,18 @@ class AIService:
                 for _, _, code, name, evidence in rows
             ],
         }
+        allowed = {code: set(evidence) for _, _, code, _, evidence in rows}
+
+        def validate_selection(output: WeeklySelectionOutput) -> None:
+            if any(item.stock_code not in allowed for item in output.analyses):
+                raise AIProviderError("AI_UNKNOWN_CANDIDATE", "AI 返回了候选白名单之外的标的。")
+            if any(
+                not set(item.evidence_ids) <= allowed[item.stock_code] for item in output.analyses
+            ):
+                raise AIProviderError("AI_UNKNOWN_EVIDENCE", "AI 返回了证据白名单之外的引用。")
+            if sum(item.adjustment != 0 for item in output.analyses) > 2:
+                raise AIProviderError("AI_ADJUSTMENT_LIMIT", "AI 调整超过两个名额，结果未被接受。")
+
         invocation, output = await self._invoke(
             "weekly_selection",
             subject_type,
@@ -116,17 +168,9 @@ class AIService:
             WeeklySelectionOutput,
             actor_id,
             session,
+            output_validator=validate_selection,
         )
         analyses = output.analyses
-        allowed = {code: set(evidence) for _, _, code, _, evidence in rows}
-        if any(item.stock_code not in allowed for item in analyses):
-            raise AIDomainError("AI returned an unknown candidate code")
-        if any(not set(item.evidence_ids) <= allowed[item.stock_code] for item in analyses):
-            raise AIDomainError("AI returned an evidence id outside the candidate whitelist")
-        if len(analyses) > 5:
-            raise AIDomainError("AI returned more than five analyses")
-        if sum(item.adjustment != 0 for item in analyses) > 2:
-            raise AIDomainError("AI may replace at most two seats")
         for _, stock_id, code, _, _ in rows:
             analysis = next((item for item in analyses if item.stock_code == code), None)
             if analysis is None:
@@ -296,6 +340,8 @@ class AIService:
         output_model: Any,
         actor_id: uuid.UUID,
         session: AsyncSession,
+        *,
+        output_validator: Callable[[Any], None] | None = None,
     ) -> tuple[models.AIInvocation, Any]:
         prompt, prompt_hash = prompt_for(capability)
         personal = await personal_provider_config(session, actor_id, self.settings)
@@ -339,16 +385,18 @@ class AIService:
         warnings: list[str] = []
         if self.mock_provider is not None and provider is self.mock_provider:
             warnings.append("EXPLICIT_TEST_MOCK_PROVIDER")
+        result = AIProviderResult(
+            "mock" if provider is self.mock_provider else "openai_responses", config.model, {}, {}
+        )
         try:
-            result: AIProviderResult = await provider.complete(
-                config, prompt, payload, output_model
-            )
+            result = await provider.complete(config, prompt, payload, output_model)
             output = validate_provider_output(result, output_model)
+            if output_validator is not None:
+                output_validator(output)
             status = "succeeded" if provider is not self.mock_provider else "mock_succeeded"
             error_code = None
             error_message = None
         except AIProviderError as exc:
-            result = AIProviderResult("mock", config.model, {}, {})
             output = None
             status = "failed"
             error_code = exc.code
@@ -377,7 +425,7 @@ class AIService:
         )
         await session.commit()
         if output is None:
-            raise AIDomainError("AI output unavailable; deterministic result preserved")
+            raise AIDomainError(f"{error_code}: {error_message} 确定性结果保持不变。")
         return invocation, output
 
     def _provider_for(
@@ -409,4 +457,5 @@ class AIService:
             enabled,
             getattr(self.settings, f"ai_{capability}_timeout_seconds"),
             getattr(self.settings, f"ai_{capability}_max_output_tokens"),
+            self.settings.ai_reasoning_effort,
         )

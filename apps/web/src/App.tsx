@@ -98,7 +98,7 @@ type AIAudit = {
   capability: AICapability;
   subject_type: string;
   subject_id: string;
-  validation: { status?: string };
+  validation: { status?: string; error_code?: string; error_message?: string };
   warnings: string[];
   created_at: string;
 };
@@ -111,6 +111,7 @@ type AIInvocation = {
   error_message: string | null;
   created_at: string;
 };
+type AIConnectionCheck = { status: "succeeded" | "failed"; model: string; latency_ms: number; error_code: string | null; message: string };
 type AIProposal = { attribution_id: string; proposal_id: string | null; status: "proposed" | "rejected"; reason: string | null; created_at: string };
 
 type AppView = "dashboard" | "approval" | "history" | "ai" | "experiments" | "users";
@@ -263,6 +264,7 @@ export function App() {
               key={item.view}
               className={view === item.view ? "app-nav-item is-active" : "app-nav-item"}
               aria-current={view === item.view ? "page" : undefined}
+              aria-label={item.label}
               onClick={() => setView(item.view)}
             >
               <span className="app-nav-icon" aria-hidden="true">{item.icon}</span>
@@ -311,6 +313,8 @@ const attributionTaxonomyLabel: Record<string, string> = {
 
 function AIWorkbench({ user }: { user: User }) {
   const [connection, setConnection] = useState<AIConnection | null>(null);
+  const [connectionCheck, setConnectionCheck] = useState<AIConnectionCheck | null>(null);
+  const [lastResult, setLastResult] = useState<AIInvocation | null>(null);
   const [weekId, setWeekId] = useState(weeklyReviewTargetWeekId());
   const [apiKey, setApiKey] = useState("");
   const [model, setModel] = useState("gpt-5.6-sol");
@@ -334,14 +338,14 @@ function AIWorkbench({ user }: { user: User }) {
   });
 
   useEffect(() => { void loadConnection().catch((reason) => setError(reason.message)); }, []);
-  useEffect(() => { void loadWeek(weekId); }, [weekId]);
+  useEffect(() => { setLastResult(null); void loadWeek(weekId); }, [weekId]);
 
   async function saveConnection(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy("connection"); setError(""); setNotice("");
     try {
       const row = await api("/api/v1/ai/connection", { method: "POST", body: JSON.stringify({ api_key: apiKey, model }) });
-      setConnection(row); setApiKey(""); setNotice("个人 API 凭据已加密保存，后续 AI 任务将优先使用该凭据。");
+      setConnection(row); setConnectionCheck(null); setApiKey(""); setNotice("个人 API 凭据已加密保存，尚未验证模型连接；可点击测试连接。");
     } catch (reason) { setError(reason instanceof Error ? reason.message : "AI 凭据保存失败"); }
     finally { setBusy(null); }
   }
@@ -350,21 +354,31 @@ function AIWorkbench({ user }: { user: User }) {
     setBusy("connection"); setError(""); setNotice("");
     try {
       await api("/api/v1/ai/connection", { method: "DELETE" });
-      await loadConnection(); setNotice("个人 API 凭据已移除。");
+      setConnectionCheck(null); await loadConnection(); setNotice("个人 API 凭据已移除。");
     } catch (reason) { setError(reason instanceof Error ? reason.message : "AI 凭据移除失败"); }
     finally { setBusy(null); }
   }
 
+  async function testConnection() {
+    setBusy("connection-test"); setError(""); setNotice(""); setConnectionCheck(null);
+    try {
+      const result = await api("/api/v1/ai/connection/test", { method: "POST" }) as AIConnectionCheck;
+      setConnectionCheck(result);
+      if (result.status === "failed") setError(`${result.error_code}: ${result.message}`);
+      else setNotice(`${result.model} 连接验证成功（${result.latency_ms} ms）。`);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "连接测试失败"); }
+    finally { setBusy(null); }
+  }
+
   async function runCapability(capability: AICapability) {
-    setBusy(capability); setError(""); setNotice("");
+    setBusy(capability); setError(""); setNotice(""); setLastResult(null);
     try {
       const result = await api("/api/v1/ai/tasks", { method: "POST", body: JSON.stringify({ capability, week_id: weekId }) }) as AIInvocation | AIProposal | ErrorAttribution;
       if ("taxonomy" in result) setNotice(`错误归因已生成：${attributionTaxonomyLabel[result.taxonomy] ?? result.taxonomy}。请核对证据后确认或驳回。`);
       else if ("proposal_id" in result) setNotice(result.status === "proposed" ? `规则实验提案已创建：${result.proposal_id}` : `规则迭代未创建：${result.reason ?? "未通过门禁"}`);
-      else setNotice(`${aiCapabilityCopy[capability].title}已完成，结果与调用审计均已保存。`);
-      await loadWeek(weekId);
+      else { setLastResult(result); setNotice(`${aiCapabilityCopy[capability].title}已完成，结果与调用审计均已保存。`); }
     } catch (reason) { setError(reason instanceof Error ? reason.message : "AI 任务执行失败"); }
-    finally { setBusy(null); }
+    finally { await loadWeek(weekId); setBusy(null); }
   }
 
   async function resolveAttribution(item: ErrorAttribution, action: "confirm" | "reject") {
@@ -385,16 +399,17 @@ function AIWorkbench({ user }: { user: User }) {
       {(error || notice) && <p role={error ? "alert" : "status"} className={`rounded-xl px-4 py-3 text-sm ${error ? "bg-red-50 text-red-800" : "bg-emerald-50 text-emerald-900"}`}>{error || notice}</p>}
       <section className="grid gap-5 xl:grid-cols-[1.05fr_1.95fr]">
         <article className="rounded-2xl border border-black/10 bg-white p-5">
-          <div className="flex items-start justify-between gap-4"><div><p className="text-xs font-semibold tracking-[0.18em] text-emerald-800">PERSONAL PROVIDER</p><h2 className="mt-2 text-xl font-semibold">OpenAI API 关联</h2></div><span className={`rounded-full px-3 py-1 text-xs font-semibold ${connected ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-600"}`}>{connected ? "已连接" : "未连接"}</span></div>
+          <div className="flex items-start justify-between gap-4"><div><p className="text-xs font-semibold tracking-[0.18em] text-emerald-800">PERSONAL PROVIDER</p><h2 className="mt-2 text-xl font-semibold">OpenAI API 关联</h2></div><span className={`rounded-full px-3 py-1 text-xs font-semibold ${connected ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-600"}`}>{connectionCheck?.status === "succeeded" ? "连接已验证" : connectionCheck?.status === "failed" ? "连接验证失败" : connected ? "凭据已配置" : "未配置"}</span></div>
           <p className="mt-3 text-sm leading-6 text-slate-600">API Key 只发送到 PAWE 服务端并加密保存，页面不会再次显示完整密钥。ChatGPT 订阅不能直接代替 API 凭据。</p>
           {connection?.source === "personal_api_key" && <p className="mt-3 rounded-xl bg-[#f7f5ef] px-4 py-3 text-sm">个人凭据 {connection.key_hint} · 模型 {connection.model}</p>}
           {connection?.source === "system_api_key" && <p className="mt-3 rounded-xl bg-[#f7f5ef] px-4 py-3 text-sm">正在使用系统管理员配置的 API 凭据 · 模型 {connection.model}</p>}
+          <button type="button" disabled={!connected || busy !== null} onClick={() => void testConnection()} className="mt-3 rounded-xl border border-emerald-200 px-4 py-2.5 text-sm font-semibold text-emerald-800 disabled:opacity-50">{busy === "connection-test" ? "正在测试…" : "测试已保存凭据的模型连接"}</button>
           <form className="mt-5 space-y-3" onSubmit={saveConnection}>
             <label className="block text-sm font-medium" htmlFor="ai-api-key">OpenAI API Key</label>
             <input className="input" id="ai-api-key" type="password" autoComplete="off" value={apiKey} onChange={(event) => setApiKey(event.target.value)} required minLength={20} placeholder="sk-…" />
             <label className="block text-sm font-medium" htmlFor="ai-model">模型</label>
             <input className="input" id="ai-model" value={model} onChange={(event) => setModel(event.target.value)} required />
-            <div className="flex flex-wrap gap-2"><button type="submit" disabled={busy === "connection"} className="rounded-xl bg-[#173f35] px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">保存个人凭据</button>{connection?.source === "personal_api_key" && <button type="button" disabled={busy === "connection"} onClick={() => void removeConnection()} className="rounded-xl border border-red-200 px-4 py-2.5 text-sm font-semibold text-red-700 disabled:opacity-50">移除</button>}</div>
+            <div className="flex flex-wrap gap-2"><button type="submit" disabled={busy !== null} className="rounded-xl bg-[#173f35] px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">保存个人凭据</button>{connection?.source === "personal_api_key" && <button type="button" disabled={busy !== null} onClick={() => void removeConnection()} className="rounded-xl border border-red-200 px-4 py-2.5 text-sm font-semibold text-red-700 disabled:opacity-50">移除</button>}</div>
           </form>
         </article>
         <article className="rounded-2xl border border-black/10 bg-white p-5">
@@ -408,9 +423,10 @@ function AIWorkbench({ user }: { user: User }) {
           })}</div>
         </article>
       </section>
+      {lastResult?.structured_output && <section className="rounded-2xl border border-black/10 bg-white p-5"><h2 className="text-xl font-semibold">{aiCapabilityCopy[lastResult.capability].title}结果</h2><p className="mt-2 text-xs text-slate-500">模型 {lastResult.model} · 仅为分析，不改变正式名单</p><pre className="mt-3 whitespace-pre-wrap break-words rounded-xl bg-[#f7f5ef] p-4 text-sm">{JSON.stringify(lastResult.structured_output, null, 2)}</pre></section>}
       <section className="grid gap-5 xl:grid-cols-2">
         <article className="rounded-2xl border border-black/10 bg-white p-5"><h2 className="text-xl font-semibold">错误归因 · {weekId}</h2>{attributions.length === 0 ? <p className="mt-4 rounded-xl border border-dashed border-black/15 p-4 text-sm text-slate-500">该周尚无错误归因。需要先有周终复盘。</p> : <div className="mt-4 space-y-3">{attributions.map((item) => <article key={item.id} className="rounded-xl bg-[#f7f5ef] p-4"><div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-semibold">{attributionTaxonomyLabel[item.taxonomy] ?? item.taxonomy}</h3><span className="rounded-full bg-white px-2 py-1 text-xs">{item.status === "confirmed" ? "已确认" : item.status === "rejected" ? "已驳回" : "待复核"} · {item.confidence}</span></div><p className="mt-2 text-sm leading-6 text-slate-600">{item.proposed_hypothesis}</p>{item.status === "proposed" && user.role === "admin" && <div className="mt-3"><input aria-label="归因处理理由" className="input" value={resolutionReason} onChange={(event) => setResolutionReason(event.target.value)} placeholder="填写确认或驳回理由（至少 8 个字符）" /><div className="mt-2 flex gap-2"><button type="button" onClick={() => void resolveAttribution(item, "confirm")} className="rounded-lg bg-emerald-800 px-3 py-2 text-xs font-semibold text-white">确认归因</button><button type="button" onClick={() => void resolveAttribution(item, "reject")} className="rounded-lg border border-red-200 px-3 py-2 text-xs font-semibold text-red-700">驳回</button></div></div>}</article>)}</div>}</article>
-        <article className="rounded-2xl border border-black/10 bg-white p-5"><h2 className="text-xl font-semibold">最近 AI 审计</h2>{audits.length === 0 ? <p className="mt-4 rounded-xl border border-dashed border-black/15 p-4 text-sm text-slate-500">尚无 AI 调用记录。</p> : <div className="mt-4 space-y-2">{audits.map((item) => <article key={item.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-black/10 px-4 py-3"><div><p className="text-sm font-semibold">{aiCapabilityCopy[item.capability]?.title ?? item.capability}</p><p className="mt-1 text-xs text-slate-500">{item.subject_id} · {formatTime(item.created_at)}</p></div><span className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-600">{item.validation.status ?? "已记录"}</span></article>)}</div>}</article>
+        <article className="rounded-2xl border border-black/10 bg-white p-5"><h2 className="text-xl font-semibold">最近 AI 审计</h2>{audits.length === 0 ? <p className="mt-4 rounded-xl border border-dashed border-black/15 p-4 text-sm text-slate-500">尚无 AI 调用记录。</p> : <div className="mt-4 space-y-2">{audits.map((item) => <article key={item.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-black/10 px-4 py-3"><div className="min-w-0"><p className="text-sm font-semibold">{aiCapabilityCopy[item.capability]?.title ?? item.capability}</p><p className="mt-1 break-all text-xs text-slate-500">{item.subject_id} · {formatTime(item.created_at)}</p>{item.validation.error_message && <p className="mt-2 text-xs text-red-700">{item.validation.error_code}：{item.validation.error_message}</p>}</div><span className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-600">{item.validation.status ?? "已记录"}</span></article>)}</div>}</article>
       </section>
     </section>
   );
@@ -953,6 +969,8 @@ function HistoryCenter() {
   const [decisionsByWeek, setDecisionsByWeek] = useState<Record<string, DecisionVersion[]>>({});
   const [replaysByWeek, setReplaysByWeek] = useState<Record<string, ReplayRun[]>>({});
   const [attributionsByReview, setAttributionsByReview] = useState<Record<string, ErrorAttribution[]>>({});
+  const [attributionBusy, setAttributionBusy] = useState<string | null>(null);
+  const [attributionErrors, setAttributionErrors] = useState<Record<string, string>>({});
   const [briefLoadingWeek, setBriefLoadingWeek] = useState<string | null>(null);
   const [briefErrorByWeek, setBriefErrorByWeek] = useState<Record<string, string>>({});
   const [expandedBriefDay, setExpandedBriefDay] = useState<string | null>(null);
@@ -1013,11 +1031,15 @@ function HistoryCenter() {
   }
 
   async function runAttribution(review: WeeklyReview) {
+    setAttributionBusy(review.id);
+    setAttributionErrors((current) => ({ ...current, [review.id]: "" }));
     try {
       await api("/api/v1/ai/tasks", { method: "POST", body: JSON.stringify({ capability: "error_attribution", review_id: review.id }) });
       const rows = await api(`/api/v1/weeks/${review.week_id}/attributions`) as ErrorAttribution[];
       setAttributionsByReview((current) => ({ ...current, [review.id]: rows.filter((row) => row.review_id === review.id) }));
-    } catch { /* The deterministic review remains visible when AI is unavailable. */ }
+    } catch (reason) {
+      setAttributionErrors((current) => ({ ...current, [review.id]: reason instanceof Error ? reason.message : "AI 归因失败，确定性复盘保持不变。" }));
+    } finally { setAttributionBusy(null); }
   }
 
   if (loading) return <DashboardState title="正在加载历史数据…" detail="正在按周整理复盘记录。" />;
@@ -1064,7 +1086,8 @@ function HistoryCenter() {
                         <p className="text-[11px] font-semibold tracking-[0.14em] text-emerald-100/70">周总结</p>
                         <p className="mt-2 text-sm leading-6 text-emerald-50">{review.summary}</p>
                       </div>
-                      <div className="mb-3 flex flex-wrap items-center gap-2"><button type="button" onClick={() => void runAttribution(review)} className="rounded-lg border border-amber-700/30 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">生成错误归因提案</button>{(attributionsByReview[review.id] ?? []).map((attribution) => <span key={attribution.id} className="rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-900">{attribution.taxonomy} · {attribution.status} · {attribution.proposed_hypothesis}</span>)}</div>
+                      <div className="mb-3 flex flex-wrap items-center gap-2"><button type="button" disabled={attributionBusy !== null} onClick={() => void runAttribution(review)} className="rounded-lg border border-amber-700/30 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900 disabled:opacity-50">{attributionBusy === review.id ? "正在生成…" : "生成错误归因提案"}</button>{(attributionsByReview[review.id] ?? []).map((attribution) => <span key={attribution.id} className="rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-900">{attribution.taxonomy} · {attribution.status} · {attribution.proposed_hypothesis}</span>)}</div>
+                      {attributionErrors[review.id] && <p role="alert" className="mb-3 rounded-xl bg-red-50 p-3 text-sm text-red-800">{attributionErrors[review.id]}</p>}
                       <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4"><StatCell label="触达 10%" value={`${Number(review.aggregate.target_touched_count ?? 0)}/${Number(review.aggregate.item_count ?? review.items.length)}`} /><StatCell label="平均周内最高" value={pct(Number(review.aggregate.average_week_high_return ?? 0))} /><StatCell label="平均周终收盘" value={pct(Number(review.aggregate.average_week_close_return ?? 0))} /><StatCell label="相对沪深300" value={review.aggregate.average_benchmark_excess == null ? "暂无" : pct(Number(review.aggregate.average_benchmark_excess))} /></div>
                       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                         {review.items.map((item) => (

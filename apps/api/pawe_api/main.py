@@ -39,6 +39,7 @@ from pawe_api.briefs.repository import BriefApplication, SqlBriefApplication
 from pawe_api.config import get_settings
 from pawe_api.contracts import (
     AIAuditResponse,
+    AIConnectionCheckResponse,
     AIConnectionResponse,
     AIConnectionUpdateRequest,
     AIInvocationResponse,
@@ -671,6 +672,18 @@ async def remove_ai_connection(
 ) -> Response:
     await delete_user_credential(session, uuid.UUID(principal.user.id))
     return Response(status_code=204)
+
+
+@app.post("/api/v1/ai/connection/test", response_model=AIConnectionCheckResponse)
+async def test_ai_connection(
+    principal: CsrfPrincipal,
+    ai: AIServiceDependency,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> AIConnectionCheckResponse:
+    try:
+        return await ai.check_connection(session, actor_id=uuid.UUID(principal.user.id))
+    except AICredentialError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post(

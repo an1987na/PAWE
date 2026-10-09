@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 .venv/
+.local/
 .tools/
 __pycache__/
 *.py[cod]

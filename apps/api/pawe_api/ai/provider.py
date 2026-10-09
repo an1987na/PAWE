@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Protocol, TypeVar
+from typing import Literal, Protocol, TypeVar
 
 from pydantic import BaseModel
 
@@ -13,6 +13,7 @@ class AIProviderConfig:
     enabled: bool
     timeout_seconds: int
     max_output_tokens: int
+    reasoning_effort: Literal["low", "medium", "high", "xhigh", "max"] = "low"
 
 
 @dataclass(frozen=True, slots=True)

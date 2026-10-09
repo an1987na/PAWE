@@ -51,6 +51,7 @@
 | `GET /weeks/{week_id}/replays` | 查看某周所有隔离回溯运行，历史页与正式数据分区展示 |
 | `GET /ai/connection` | 登录用户查看本人个人凭据/系统凭据连接状态，不返回完整密钥 |
 | `POST /ai/connection` | 登录用户 + CSRF 加密保存或替换本人 OpenAI API Key |
+| `POST /ai/connection/test` | 登录用户 + CSRF 使用本人优先凭据进行最小模型连接验证；返回 succeeded/failed、安全错误码、模型和耗时，不产生业务结果 |
 | `DELETE /ai/connection` | 登录用户 + CSRF 删除本人个人凭据 |
 | `POST /ai/tasks` | 登录用户 + CSRF 触发复盘解读/错误归因；周初分析与规则迭代仍限管理员 |
 | `GET /ai/invocations/{invocation_id}` | 登录用户查看结构化 AI 调用审计 |

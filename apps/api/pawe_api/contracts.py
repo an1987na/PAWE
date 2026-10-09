@@ -626,6 +626,14 @@ class AIConnectionResponse(BaseModel):
     updated_at: datetime | None = None
 
 
+class AIConnectionCheckResponse(BaseModel):
+    status: Literal["succeeded", "failed"]
+    model: str
+    latency_ms: int
+    error_code: str | None = None
+    message: str
+
+
 class AIInvocationResponse(BaseModel):
     id: str
     capability: Literal["weekly_selection", "weekly_review", "error_attribution", "rule_evolution"]

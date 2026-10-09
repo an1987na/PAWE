@@ -26,6 +26,10 @@ class WeeklyReviewOutput(BaseModel):
     abnormalities: list[str] = Field(max_length=8)
 
 
+class ConnectionCheckOutput(BaseModel):
+    result: Literal["ok"]
+
+
 class ErrorAttributionOutput(BaseModel):
     taxonomy: Literal[
         "market_state_error",
